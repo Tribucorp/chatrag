@@ -59,12 +59,12 @@ const conversationConfig = {
   },
   tts: {
     model_id: "eleven_flash_v2_5",
-    // Voz en español (la misma usada en el proyecto socios). Cámbiala en el
-    // dashboard si prefieres otra voz/acento.
-    voice_id: "cjVigY5qzO86Huf0OWal",
-    stability: 0.6,
+    // "Juan Manuel - Conversational": voz masculina en español latinoamericano,
+    // neutra y conversacional. Cámbiala por otro voice_id si prefieres otra voz.
+    voice_id: "rBqbBncz61jpuaOTI1GW",
+    stability: 0.5,
     speed: 1.0,
-    similarity_boost: 0.8,
+    similarity_boost: 0.85,
   },
 };
 
