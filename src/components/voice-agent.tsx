@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Conversation } from "@11labs/client";
-import { Mic, MicOff, PhoneOff, Loader2, AudioLines } from "lucide-react";
+import {
+  Mic,
+  MicOff,
+  PhoneOff,
+  Loader2,
+  AudioLines,
+  ExternalLink,
+} from "lucide-react";
 
 interface VoiceAgentProps {
   agentId: string;
@@ -11,6 +18,7 @@ interface VoiceAgentProps {
 type Status = "idle" | "connecting" | "connected" | "error";
 type Mode = "listening" | "speaking";
 type Turn = { role: "user" | "assistant"; content: string };
+type LinkCard = { url: string; titulo: string };
 
 export function VoiceAgent({ agentId }: VoiceAgentProps) {
   const conversationRef = useRef<Conversation | null>(null);
@@ -21,6 +29,7 @@ export function VoiceAgent({ agentId }: VoiceAgentProps) {
   const [isMuted, setIsMuted] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [transcript, setTranscript] = useState<Turn[]>([]);
+  const [links, setLinks] = useState<LinkCard[]>([]);
 
   const isConnected = status === "connected";
 
@@ -41,6 +50,7 @@ export function VoiceAgent({ agentId }: VoiceAgentProps) {
     setStatus("connecting");
     setErrorMsg("");
     setTranscript([]);
+    setLinks([]);
 
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -56,6 +66,19 @@ export function VoiceAgent({ agentId }: VoiceAgentProps) {
       const conversation = await Conversation.startSession({
         agentId,
         connectionType: "websocket",
+        clientTools: {
+          // El agente llama a esta herramienta para enviar al ciudadano el
+          // enlace exacto de un trámite/servicio del sitio municipal.
+          mostrar_enlace: ({ url, titulo }: { url: string; titulo: string }) => {
+            if (!url) return "sin url";
+            setLinks((prev) =>
+              prev.some((l) => l.url === url)
+                ? prev
+                : [...prev, { url, titulo: titulo || url }]
+            );
+            return "enlace mostrado al usuario";
+          },
+        },
         onConnect: () => setStatus("connected"),
         onDisconnect: (details) => {
           if (details?.reason === "error") {
@@ -199,6 +222,34 @@ export function VoiceAgent({ agentId }: VoiceAgentProps) {
             <PhoneOff className="h-4 w-4" />
             Finalizar
           </button>
+        </div>
+      )}
+
+      {/* Enlaces / trámites que el agente comparte */}
+      {links.length > 0 && (
+        <div className="fade-in mt-6 w-full space-y-2">
+          <p className="px-1 text-xs font-medium uppercase tracking-wider text-white/45">
+            Enlaces y trámites
+          </p>
+          {links.map((l, i) => (
+            <a
+              key={i}
+              href={l.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group flex items-center justify-between gap-3 rounded-xl border border-[#d52b1e]/30 bg-[#d52b1e]/10 px-4 py-3 transition-colors hover:bg-[#d52b1e]/20"
+            >
+              <span className="flex flex-col">
+                <span className="text-sm font-medium text-white">
+                  {l.titulo}
+                </span>
+                <span className="max-w-[18rem] truncate text-[11px] text-white/45">
+                  {l.url.replace(/^https?:\/\//, "")}
+                </span>
+              </span>
+              <ExternalLink className="h-4 w-4 shrink-0 text-white/60 transition-transform group-hover:translate-x-0.5" />
+            </a>
+          ))}
         </div>
       )}
 

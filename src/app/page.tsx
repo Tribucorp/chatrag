@@ -7,24 +7,25 @@ export default function Home() {
     <main className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 py-10">
       <header className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.2em] text-white/50">
         <span className="inline-block h-2 w-2 rounded-full bg-[#d52b1e]" />
-        Asistente de Voz
+        Municipalidad de Santiago
       </header>
       <h1 className="mb-3 text-center text-4xl font-semibold tracking-tight sm:text-5xl">
-        Conversa sobre{" "}
+        Asistente de la{" "}
         <span className="bg-gradient-to-r from-[#3b82f6] via-white to-[#d52b1e] bg-clip-text text-transparent">
-          Chile
+          comuna de Santiago
         </span>
       </h1>
       <p className="mb-10 max-w-md text-center text-sm leading-relaxed text-white/55">
-        Habla con un agente de voz conversacional sobre geografía, historia,
-        cultura, economía y curiosidades del país. Pulsa el orbe y empieza a
-        hablar.
+        Asistente de voz de la comuna de Santiago de Chile. Pregúntame por
+        trámites, servicios municipales, direcciones, el alcalde o información
+        del sitio. Pulsa el orbe y empieza a hablar — te paso el enlace del
+        trámite cuando lo necesites.
       </p>
 
       <VoiceAgent agentId={agentId} />
 
       <footer className="mt-12 text-center text-[11px] text-white/35">
-        RAG + Agente · ElevenLabs Conversational AI
+        RAG sobre munistgo.cl · ElevenLabs Conversational AI
       </footer>
     </main>
   );

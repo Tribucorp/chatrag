@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Asistente de Voz · Chile",
+  title: "Asistente de la comuna de Santiago",
   description:
-    "Agente de voz conversacional sobre Chile — geografía, historia, cultura y datos del país. Powered by ElevenLabs.",
+    "Asistente de voz de la Municipalidad de Santiago de Chile — trámites, servicios municipales, direcciones y alcalde. Powered by ElevenLabs.",
 };
 
 export default function RootLayout({
