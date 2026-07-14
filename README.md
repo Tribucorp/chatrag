@@ -1,7 +1,8 @@
-# Asistente de Voz · Comuna de Santiago 🇨🇱
+# ChatRAG 🇨🇱
 
-Asistente de voz conversacional **oficial de la comuna de Santiago de Chile**
-(Ilustre Municipalidad de Santiago — [munistgo.cl](https://www.munistgo.cl/)),
+**ChatRAG** es un asistente de voz conversacional con RAG, de **Tribucorp**.
+Este repo contiene el caso de uso desplegado para la **comuna de Santiago de
+Chile** (Ilustre Municipalidad de Santiago — [munistgo.cl](https://www.munistgo.cl/)),
 con una interfaz limpia tipo orbe. Hablas con él y te ayuda con **trámites,
 servicios municipales, direcciones del municipio, el alcalde** e información del
 sitio. Cuando un trámite tiene una página, **te pasa el enlace directo** como
@@ -106,7 +107,7 @@ knowledge/                Docs base opcionales (markdown)
    implementada en el front como tarjetas clickeables.
 7. **Enlaces específicos**: docs de texto que mapean un trámite a su URL
    (ej. pago de multas/TAG).
-8. **Deploy** en Vercel (team Tribucorp) + repo en GitHub `Tribucorp/asistente-voz-chile`.
+8. **Deploy** en Vercel (team Tribucorp) + repo en GitHub `Tribucorp/chatrag`.
 
 ## Personalizar
 
