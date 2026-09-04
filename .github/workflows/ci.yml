@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv python install 3.12
+      # El SDK (tribu-*) se sirve del registry privado de Tribucorp, no de PyPI. En CI se
+      # inyecta la credencial del indice por secret; el paso de instalacion completa corre
+      # donde el registry es alcanzable. Aqui validamos lo propio del producto sin las wheels.
+      - name: Instalar deps del producto (sin las wheels del SDK)
+        run: uv pip install --system fastapi uvicorn pydantic pytest httpx mypy ruff
+      - name: Instalar chatrag-api (sin deps del SDK)
+        run: uv pip install --system --no-deps -e .
+      - run: ruff check src tests
+      - run: mypy --strict src/chatrag_api
+      - run: pytest tests -q

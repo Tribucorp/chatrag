@@ -4,7 +4,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Asistente de la comuna de Santiago",
   description:
-    "Asistente de voz de la Municipalidad de Santiago de Chile — trámites, servicios municipales, direcciones y alcalde. Powered by ElevenLabs.",
+    "Asistente de la Municipalidad de Santiago de Chile — trámites, servicios municipales, direcciones y alcalde. RAG on-prem con citas verificables (Tribu SDK).",
 };
 
 export default function RootLayout({

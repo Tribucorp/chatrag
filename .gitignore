@@ -9,3 +9,12 @@ build
 *.tsbuildinfo
 next-env.d.ts
 .vercel
+
+# Python (backend)
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
