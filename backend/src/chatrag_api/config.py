@@ -40,6 +40,12 @@ class Settings(BaseModel):
     # por entorno; jamás clonación de voz ni reconocimiento de emociones (Riva stock).
     voice_enabled: bool = False
 
+    # Bypass de identidad SOLO para desarrollo local, mientras tribu-auth no esté wireado al
+    # cliente: si no llega X-User-Id, `current_user` usa esta identidad en vez de fallar con 401.
+    # Apagado por defecto (None) — fail-closed se mantiene salvo que se active explícitamente
+    # por entorno. Nunca activar en producción.
+    dev_identity_bypass: str | None = None
+
     @classmethod
     def from_env(cls) -> Settings:
         """Construye desde variables de entorno, con los defaults on-prem del SDK."""
@@ -58,4 +64,5 @@ class Settings(BaseModel):
             nim_chat_url=os.environ.get("CHATRAG_NIM_CHAT_URL", "http://localhost:8004"),
             egress_allowed_hosts=allowed,
             voice_enabled=os.environ.get("CHATRAG_VOICE_ENABLED", "0") == "1",
+            dev_identity_bypass=os.environ.get("CHATRAG_DEV_IDENTITY_BYPASS") or None,
         )

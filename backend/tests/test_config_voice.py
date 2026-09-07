@@ -15,12 +15,19 @@ def test_from_env_defaults_on_prem(monkeypatch):
         "CHATRAG_EMBED_DIM",
         "CHATRAG_VOICE_ENABLED",
         "CHATRAG_EGRESS_HOSTS",
+        "CHATRAG_DEV_IDENTITY_BYPASS",
     ):
         monkeypatch.delenv(var, raising=False)
     settings = Settings.from_env()
     assert settings.voice_enabled is False  # tribu-voice apagado por defecto
     assert "localhost" in settings.egress_allowed_hosts
     assert settings.nim_embed_url.startswith("http://")
+    assert settings.dev_identity_bypass is None  # fail-closed salvo activación explícita
+
+
+def test_dev_identity_bypass_por_entorno(monkeypatch):
+    monkeypatch.setenv("CHATRAG_DEV_IDENTITY_BYPASS", "dev-local")
+    assert Settings.from_env().dev_identity_bypass == "dev-local"
 
 
 def test_voice_flag_por_entorno(monkeypatch):

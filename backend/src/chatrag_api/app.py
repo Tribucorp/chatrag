@@ -25,13 +25,20 @@ from chatrag_api.rag import Retriever, answer_query
 
 
 def current_user(
+    request: Request,
     x_user_id: str | None = Header(default=None),
     x_user_acls: str | None = Header(default=None),
 ) -> UserContext:
     """Materializa el usuario a partir de cabeceras que **tribu-auth ya validó** aguas arriba.
-    Sin identidad, 401 — fail-closed, nunca un usuario anónimo con acceso implícito."""
+    Sin identidad, 401 — fail-closed, nunca un usuario anónimo con acceso implícito.
+
+    Única excepción: `dev_identity_bypass` en settings, pensado solo para desarrollo local
+    mientras tribu-auth no esté wireado al cliente (apagado por defecto)."""
 
     if not x_user_id:
+        settings: Settings = request.app.state.settings
+        if settings.dev_identity_bypass:
+            return UserContext(user_id=settings.dev_identity_bypass, acls=frozenset({"dev"}))
         raise HTTPException(status_code=401, detail="falta identidad (tribu-auth)")
     acls = frozenset(a.strip() for a in (x_user_acls or "").split(",") if a.strip())
     return UserContext(user_id=x_user_id, acls=acls)
