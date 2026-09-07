@@ -37,6 +37,34 @@ def test_query_sin_identidad_es_401():
     assert resp.status_code == 401
 
 
+def test_query_sin_identidad_con_dev_bypass_no_es_401():
+    settings = Settings(app_name="ChatRAG-test", dev_identity_bypass="dev-local")
+    app = create_app(
+        settings=settings,
+        retriever=FakeRetriever([Citation(text="x", source_uri="doc://p", score=0.9)]),
+    )
+    client = TestClient(app)
+    resp = client.post("/query", json={"question": "¿horario?"})
+    assert resp.status_code == 200
+
+
+def test_dev_bypass_no_se_activa_si_llega_identidad_real():
+    settings = Settings(app_name="ChatRAG-test", dev_identity_bypass="dev-local")
+    citations = [
+        Citation(
+            text="secreto", source_uri="doc://fin", score=0.9, required_acl="finanzas"
+        ),
+    ]
+    app = create_app(settings=settings, retriever=FakeRetriever(citations))
+    client = TestClient(app)
+    resp = client.post(
+        "/query",
+        json={"question": "¿nómina?"},
+        headers={"X-User-Id": "u1", "X-User-Acls": ""},
+    )
+    assert resp.json()["abstained"] is True  # el bypass no le regala ACLs a un usuario real
+
+
 def test_query_devuelve_citas_filtradas_por_acl():
     citations = [
         Citation(text="público", source_uri="doc://pub", title="pub", score=0.9),
