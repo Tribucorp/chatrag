@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
       - run: uv venv --python 3.12
-      - run: uv pip install fastapi uvicorn pydantic httpx pytest mypy ruff
+      - run: uv pip install fastapi uvicorn pydantic httpx pytest pytest-asyncio mypy ruff
       - run: uv pip install --no-deps -e .
       - run: uv run --no-sync ruff check src tests
       - run: uv run --no-sync mypy --strict src/chatrag_api

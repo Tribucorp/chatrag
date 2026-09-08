@@ -31,6 +31,9 @@ class Settings(BaseModel):
     nim_embed_url: str = "http://localhost:8002"
     nim_rerank_url: str = "http://localhost:8003"
     nim_chat_url: str = "http://localhost:8004"
+    # Nombre del modelo tal como lo expone el contenedor NIM (`/v1/chat/completions`,
+    # contrato OpenAI-compatible). Varía por despliegue on-prem — sin default plausible.
+    nim_chat_model: str = "nemotron"
 
     # Egress deny-by-default (tribu-http): hosts a los que el backend puede salir. Solo los
     # NIM on-prem por defecto; nada de internet abierto.
@@ -62,6 +65,7 @@ class Settings(BaseModel):
             nim_embed_url=os.environ.get("CHATRAG_NIM_EMBED_URL", "http://localhost:8002"),
             nim_rerank_url=os.environ.get("CHATRAG_NIM_RERANK_URL", "http://localhost:8003"),
             nim_chat_url=os.environ.get("CHATRAG_NIM_CHAT_URL", "http://localhost:8004"),
+            nim_chat_model=os.environ.get("CHATRAG_NIM_CHAT_MODEL", "nemotron"),
             egress_allowed_hosts=allowed,
             voice_enabled=os.environ.get("CHATRAG_VOICE_ENABLED", "0") == "1",
             dev_identity_bypass=os.environ.get("CHATRAG_DEV_IDENTITY_BYPASS") or None,
