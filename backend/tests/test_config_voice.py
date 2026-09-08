@@ -16,6 +16,7 @@ def test_from_env_defaults_on_prem(monkeypatch):
         "CHATRAG_VOICE_ENABLED",
         "CHATRAG_EGRESS_HOSTS",
         "CHATRAG_DEV_IDENTITY_BYPASS",
+        "CHATRAG_SERVICE_BEARER_TOKEN",
     ):
         monkeypatch.delenv(var, raising=False)
     settings = Settings.from_env()
@@ -23,11 +24,17 @@ def test_from_env_defaults_on_prem(monkeypatch):
     assert "localhost" in settings.egress_allowed_hosts
     assert settings.nim_embed_url.startswith("http://")
     assert settings.dev_identity_bypass is None  # fail-closed salvo activación explícita
+    assert settings.service_bearer_token is None  # sin exigir bearer salvo activación explícita
 
 
 def test_dev_identity_bypass_por_entorno(monkeypatch):
     monkeypatch.setenv("CHATRAG_DEV_IDENTITY_BYPASS", "dev-local")
     assert Settings.from_env().dev_identity_bypass == "dev-local"
+
+
+def test_service_bearer_token_por_entorno(monkeypatch):
+    monkeypatch.setenv("CHATRAG_SERVICE_BEARER_TOKEN", "s3cr3t0")
+    assert Settings.from_env().service_bearer_token == "s3cr3t0"
 
 
 def test_voice_flag_por_entorno(monkeypatch):

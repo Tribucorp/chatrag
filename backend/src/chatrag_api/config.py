@@ -49,6 +49,14 @@ class Settings(BaseModel):
     # por entorno. Nunca activar en producción.
     dev_identity_bypass: str | None = None
 
+    # Bearer de servicio compartido entre el backend y su único caller de confianza (el BFF del
+    # frontend, `chatrag/src/app/api/chat/route.ts`). `None` por defecto: preserva el
+    # comportamiento actual (cualquiera que alcance el backend puede declarar su propia
+    # identidad vía X-User-Id/X-User-Acls, confiando en que la red ya lo restringe). Activarlo
+    # (mismo valor en ambos lados) exige además ese bearer — fail-closed una vez configurado,
+    # igual que `dev_identity_bypass`.
+    service_bearer_token: str | None = None
+
     @classmethod
     def from_env(cls) -> Settings:
         """Construye desde variables de entorno, con los defaults on-prem del SDK."""
@@ -69,4 +77,5 @@ class Settings(BaseModel):
             egress_allowed_hosts=allowed,
             voice_enabled=os.environ.get("CHATRAG_VOICE_ENABLED", "0") == "1",
             dev_identity_bypass=os.environ.get("CHATRAG_DEV_IDENTITY_BYPASS") or None,
+            service_bearer_token=os.environ.get("CHATRAG_SERVICE_BEARER_TOKEN") or None,
         )

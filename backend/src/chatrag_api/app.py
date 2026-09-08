@@ -14,6 +14,7 @@ registry del SDK; si no se inyecta, se construye perezosamente el de `tribu-rag`
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,6 +23,25 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from chatrag_api.config import Settings
 from chatrag_api.models import Answer, Query, UserContext
 from chatrag_api.rag import ChatGenerator, Retriever, answer_query
+
+
+def verify_service_bearer(
+    request: Request, authorization: str | None = Header(default=None)
+) -> None:
+    """`current_user` confía en que `X-User-Id`/`X-User-Acls` ya vienen validadas "aguas
+    arriba" — pero sin esto, cualquier caller que alcance el backend puede declarar su propia
+    identidad, no solo el BFF del frontend. Si `service_bearer_token` está configurado, exige
+    `Authorization: Bearer <token>` coincidente (comparación de tiempo constante) antes de
+    seguir. Sin configurar (`None`, default), no hace nada — preserva el comportamiento actual;
+    fail-closed una vez activado, igual que `dev_identity_bypass`."""
+
+    settings: Settings = request.app.state.settings
+    expected = settings.service_bearer_token
+    if expected is None:
+        return
+    token = authorization.removeprefix("Bearer ") if authorization else None
+    if token is None or not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="falta o es inválido el bearer de servicio")
 
 
 def current_user(
@@ -93,7 +113,7 @@ def create_app(
             "voice_enabled": app_settings.voice_enabled,
         }
 
-    @app.post("/query", response_model=Answer)
+    @app.post("/query", response_model=Answer, dependencies=[Depends(verify_service_bearer)])
     async def query(
         body: Query,
         request: Request,

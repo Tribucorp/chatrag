@@ -110,3 +110,42 @@ def test_query_se_abstiene_si_todo_esta_restringido():
     )
     assert resp.status_code == 200
     assert resp.json()["abstained"] is True
+
+
+def test_query_sin_service_bearer_configurado_no_lo_exige():
+    # Comportamiento actual preservado: sin service_bearer_token, ninguna cabecera Authorization
+    # hace falta (default None = sin cambios respecto a antes de esta dependencia).
+    client = _client([Citation(text="x", source_uri="doc://p", score=0.9)])
+    resp = client.post(
+        "/query", json={"question": "¿horario?"}, headers={"X-User-Id": "u1"}
+    )
+    assert resp.status_code == 200
+
+
+def test_query_con_service_bearer_configurado_exige_bearer_correcto():
+    settings = Settings(app_name="ChatRAG-test", service_bearer_token="s3cr3t0")
+    app = create_app(
+        settings=settings,
+        retriever=FakeRetriever([Citation(text="x", source_uri="doc://p", score=0.9)]),
+        generator=FakeGenerator(),
+    )
+    client = TestClient(app)
+
+    sin_bearer = client.post(
+        "/query", json={"question": "¿horario?"}, headers={"X-User-Id": "u1"}
+    )
+    assert sin_bearer.status_code == 401
+
+    bearer_incorrecto = client.post(
+        "/query",
+        json={"question": "¿horario?"},
+        headers={"X-User-Id": "u1", "Authorization": "Bearer incorrecto"},
+    )
+    assert bearer_incorrecto.status_code == 401
+
+    bearer_correcto = client.post(
+        "/query",
+        json={"question": "¿horario?"},
+        headers={"X-User-Id": "u1", "Authorization": "Bearer s3cr3t0"},
+    )
+    assert bearer_correcto.status_code == 200
