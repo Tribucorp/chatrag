@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
 from chatrag_api.config import Settings
 from chatrag_api.models import Answer, Query, UserContext
-from chatrag_api.rag import Retriever, answer_query
+from chatrag_api.rag import ChatGenerator, Retriever, answer_query
 
 
 def current_user(
@@ -45,26 +45,44 @@ def current_user(
 
 
 def create_app(
-    *, settings: Settings | None = None, retriever: Retriever | None = None
+    *,
+    settings: Settings | None = None,
+    retriever: Retriever | None = None,
+    generator: ChatGenerator | None = None,
 ) -> FastAPI:
-    """Crea la app. `retriever` inyectable para tests; si es `None`, se construye el de
-    `tribu-rag` en el arranque (requiere el registry privado)."""
+    """Crea la app. `retriever`/`generator` inyectables para tests; si son `None`, se
+    construyen los de producción (`tribu-rag`, NIM de chat vía `tribu-http`) en el arranque
+    (requieren el registry privado y el NIM on-prem respectivamente)."""
 
     app_settings = settings or Settings.from_env()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # tribu-observability: instrumentar el servicio (trazas de decisión, Prometheus).
-        # Import perezoso del retriever real para no exigir el wheel del SDK en tests.
+        # Import perezoso de los adaptadores reales para no exigir sus wheels/NIM en tests.
         if app.state.retriever is None:  # pragma: no cover - requiere el registry del SDK
             from chatrag_api.rag import tribu_rag_retriever
 
             app.state.retriever = tribu_rag_retriever(app_settings.embed_dim)
-        yield
+        if app.state.generator is None:  # pragma: no cover - requiere el NIM de chat on-prem
+            from chatrag_api.rag import tribu_nim_chat_generator
+
+            app.state.generator = tribu_nim_chat_generator(
+                app_settings.nim_chat_url,
+                model=app_settings.nim_chat_model,
+                allowed_hosts=app_settings.egress_allowed_hosts,
+            )
+        try:
+            yield
+        finally:
+            aclose = getattr(app.state.generator, "aclose", None)
+            if aclose is not None:  # pragma: no cover - requiere el generador real
+                await aclose()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
     app.state.settings = app_settings
     app.state.retriever = retriever
+    app.state.generator = generator
 
     @app.get("/health")
     def health() -> dict[str, object]:
@@ -76,14 +94,17 @@ def create_app(
         }
 
     @app.post("/query", response_model=Answer)
-    def query(
+    async def query(
         body: Query,
         request: Request,
         user: UserContext = Depends(current_user),
     ) -> Answer:
         retriever = request.app.state.retriever
+        generator = request.app.state.generator
         if retriever is None:
             raise HTTPException(status_code=503, detail="retriever no inicializado")
-        return answer_query(retriever, body, user)
+        if generator is None:
+            raise HTTPException(status_code=503, detail="generador no inicializado")
+        return await answer_query(retriever, generator, body, user)
 
     return app

@@ -15,9 +15,16 @@ class FakeRetriever:
         return self._citations[:top_k]
 
 
+class FakeGenerator:
+    async def generate(self, question: str, citations: Sequence[Citation]) -> str:
+        return "resumen de prueba"
+
+
 def _client(citations: Sequence[Citation]) -> TestClient:
     settings = Settings(app_name="ChatRAG-test")
-    app = create_app(settings=settings, retriever=FakeRetriever(citations))
+    app = create_app(
+        settings=settings, retriever=FakeRetriever(citations), generator=FakeGenerator()
+    )
     return TestClient(app)
 
 
@@ -42,6 +49,7 @@ def test_query_sin_identidad_con_dev_bypass_no_es_401():
     app = create_app(
         settings=settings,
         retriever=FakeRetriever([Citation(text="x", source_uri="doc://p", score=0.9)]),
+        generator=FakeGenerator(),
     )
     client = TestClient(app)
     resp = client.post("/query", json={"question": "¿horario?"})
@@ -55,7 +63,9 @@ def test_dev_bypass_no_se_activa_si_llega_identidad_real():
             text="secreto", source_uri="doc://fin", score=0.9, required_acl="finanzas"
         ),
     ]
-    app = create_app(settings=settings, retriever=FakeRetriever(citations))
+    app = create_app(
+        settings=settings, retriever=FakeRetriever(citations), generator=FakeGenerator()
+    )
     client = TestClient(app)
     resp = client.post(
         "/query",

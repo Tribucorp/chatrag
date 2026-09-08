@@ -14,6 +14,17 @@ class FakeRetriever:
         return self._citations[:top_k]
 
 
+class FakeGenerator:
+    """Generador de prueba: no llama a ningún NIM, solo confirma qué citas recibió."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Sequence[Citation]]] = []
+
+    async def generate(self, question: str, citations: Sequence[Citation]) -> str:
+        self.calls.append((question, citations))
+        return "resumen de prueba"
+
+
 def _c(uri: str, *, acl: str | None = None, score: float = 0.5, text: str = "x") -> Citation:
     return Citation(text=text, source_uri=uri, title=uri, score=score, required_acl=acl)
 
@@ -48,18 +59,32 @@ def test_el_filtrado_no_depende_de_que_el_cliente_pida_menos():
 # --- answer_query -------------------------------------------------------------------------
 
 
-def test_responde_con_citas_ordenadas_por_score():
+async def test_responde_con_citas_ordenadas_por_score():
     user = UserContext(user_id="u", acls=frozenset())
     retr = FakeRetriever([_c("doc://baja", score=0.2), _c("doc://alta", score=0.9)])
-    answer = answer_query(retr, Query(question="¿horario?"), user)
+    gen = FakeGenerator()
+    answer = await answer_query(retr, gen, Query(question="¿horario?"), user)
     assert answer.abstained is False
     assert [c.source_uri for c in answer.citations] == ["doc://alta", "doc://baja"]
+    assert answer.text == "resumen de prueba"
 
 
-def test_se_abstiene_cuando_no_queda_base_accesible():
+async def test_generador_recibe_solo_citas_ya_filtradas_por_acl():
+    user = UserContext(user_id="u", acls=frozenset({"rrhh"}))
+    retr = FakeRetriever([_c("doc://rrhh", acl="rrhh"), _c("doc://finanzas", acl="finanzas")])
+    gen = FakeGenerator()
+    await answer_query(retr, gen, Query(question="¿nómina?"), user)
+    assert len(gen.calls) == 1
+    _, citations = gen.calls[0]
+    assert [c.source_uri for c in citations] == ["doc://rrhh"]
+
+
+async def test_se_abstiene_cuando_no_queda_base_accesible():
     user = UserContext(user_id="u", acls=frozenset())  # sin ACLs
     retr = FakeRetriever([_c("doc://secreto", acl="finanzas")])
-    answer = answer_query(retr, Query(question="¿nómina?"), user)
+    gen = FakeGenerator()
+    answer = await answer_query(retr, gen, Query(question="¿nómina?"), user)
     assert answer.abstained is True
     assert answer.citations == ()
     assert "no" in answer.text.lower()
+    assert gen.calls == []  # nunca se invoca el generador sin base accesible
