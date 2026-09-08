@@ -1,12 +1,19 @@
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
 import { ChatAgent } from "@/components/chat-agent";
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
   return (
     <main className="relative z-10 flex min-h-screen flex-col items-center justify-center px-6 py-10">
       <header className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.2em] text-white/50">
         <span className="inline-block h-2 w-2 rounded-full bg-[#d52b1e]" />
         Ilustre Municipalidad de Santiago
       </header>
+      <p className="mb-6 text-[11px] text-white/40">Sesión: {session.user.email}</p>
       <h1 className="mb-3 text-center text-4xl font-semibold tracking-tight sm:text-5xl">
         Asistente de la{" "}
         <span className="bg-gradient-to-r from-[#3b82f6] via-white to-[#d52b1e] bg-clip-text text-transparent">

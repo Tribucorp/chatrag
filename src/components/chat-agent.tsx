@@ -1,22 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, ShieldCheck, MicOff } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Send, Loader2, ShieldCheck, MicOff, LogOut } from "lucide-react";
+import { signOut } from "@/lib/auth-client";
 
 // Reemplaza al antiguo VoiceAgent acoplado a ElevenLabs (proveedor cloud, incompatible con la
-// constitución on-prem del Tribu SDK). Ahora consulta al backend RAG del SDK (`/query`) y las
-// respuestas llegan con CITAS VERIFICABLES ya filtradas por ACL en el servidor. La voz queda
-// como stub apagado hasta que se levante el bloqueo legal de tribu-voice (Riva stock, jamás
-// clonación); por eso no se importa ningún SDK de voz cloud aquí.
+// constitución on-prem del Tribu SDK). Ahora consulta al BFF del propio frontend (`/api/chat`),
+// que valida la sesión real (tribu-auth) y reenvía al backend RAG del SDK con identidad —
+// el navegador ya NO llama al backend directamente ni conoce su URL. Las respuestas llegan con
+// CITAS VERIFICABLES ya filtradas por ACL en el servidor. La voz queda como stub apagado hasta
+// que se levante el bloqueo legal de tribu-voice (Riva stock, jamás clonación).
 
 type Citation = { text: string; source_uri: string; title: string; score: number };
 type Answer = { text: string; citations: Citation[]; abstained: boolean };
 type Turn = { role: "user" | "assistant"; content: string; citations?: Citation[] };
 
-const API_BASE = process.env.NEXT_PUBLIC_CHATRAG_API_URL ?? "";
 const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
 
 export function ChatAgent() {
+  const router = useRouter();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,6 +30,12 @@ export function ChatAgent() {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns]);
 
+  const logout = useCallback(async () => {
+    await signOut();
+    router.push("/login");
+    router.refresh();
+  }, [router]);
+
   const send = useCallback(async () => {
     const question = input.trim();
     if (!question || loading) return;
@@ -35,7 +44,7 @@ export function ChatAgent() {
     setTurns((t) => [...t, { role: "user", content: question }]);
     setLoading(true);
     try {
-      const resp = await fetch(`${API_BASE}/query`, {
+      const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
@@ -55,9 +64,18 @@ export function ChatAgent() {
 
   return (
     <div className="flex w-full max-w-xl flex-col gap-4">
-      <div className="flex items-center justify-center gap-2 text-[11px] text-white/40">
-        <ShieldCheck className="h-3.5 w-3.5" />
-        Respuestas con citas verificables · RAG on-prem (Tribu SDK)
+      <div className="flex items-center justify-center gap-3 text-[11px] text-white/40">
+        <span className="flex items-center gap-2">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Respuestas con citas verificables · RAG on-prem (Tribu SDK)
+        </span>
+        <button
+          onClick={logout}
+          className="flex items-center gap-1 underline decoration-white/20 hover:text-white/70"
+        >
+          <LogOut className="h-3 w-3" />
+          Salir
+        </button>
       </div>
 
       <div className="min-h-[240px] rounded-2xl border border-white/10 bg-white/[0.03] p-4">
