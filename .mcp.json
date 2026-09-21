@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "x9": {
+      "command": "ssh",
+      "args": [
+        "administrador@spark-69f8.taild09659.ts.net",
+        "docker run --rm -i --network host -v /etc/machine-id:/etc/machine-id:ro -v $HOME/PE-01.node.json:/etc/tribu/PE-01.node.json:ro --env-file /home/administrador/.tribu/github.env -e TRIBU_NODE_LICENSE_ENFORCEMENT=1 -e TRIBU_NODE_LICENSE_PATH=/etc/tribu/PE-01.node.json -e TRIBU_NODE_LICENSE_ROOT_PUBLIC_KEY_HEX=f4289777a84af4bc8bfec5ecb8f2b60ace37121a251e95e496432eafc549b760 -e TRIBU_NIM_EMBED_URL=http://localhost:8002 -e TRIBU_NIM_CHAT_URL=http://localhost:8001 -e TRIBU_NIM_RERANK_URL=http://localhost:8003 -e TRIBU_NIM_JUDGE_URL=http://localhost:8004 ghcr.io/tribucorp/tribu-sdk/x9-node@sha256:d1fbaede5456fb4b7e9a93b8b1d4afc213871263a486eb469ad0576ecda0b7f3"
+      ]
+    }
+  }
+}
