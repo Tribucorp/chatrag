@@ -6,13 +6,42 @@ on:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: chatrag
+    env:
+      # next build ejecuta src/lib/auth.ts al recolectar datos de página, y falla-cerrado sin
+      # secreto (ver auth.ts) — este valor es solo para que el build de CI no aborte, nunca se
+      # sirve tráfico real con él.
+      CHATRAG_AUTH_SECRET: ci-build-placeholder-not-a-real-secret-do-not-use-in-prod
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: chatrag
+      # @tribu/auth no tiene registry npm privado todavía (a diferencia del índice `tribu` de
+      # uv en el backend) — se consume como dependencia `file:../tribu-sdk/ts/tribu-auth`, así
+      # que el workflow hace checkout también de tribu-sdk como sibling bajo el mismo workspace.
+      # Requiere el secret TRIBU_SDK_PAT (PAT fine-grained, permiso `contents: read` sobre
+      # Tribucorp/tribu-sdk) — Settings → Secrets and variables → Actions de este repo.
+      - uses: actions/checkout@v4
+        with:
+          repository: Tribucorp/tribu-sdk
+          token: ${{ secrets.TRIBU_SDK_PAT }}
+          path: tribu-sdk
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10.32.1"
+      - name: "Build @tribu/auth (dependencia file: de chatrag)"
+        working-directory: tribu-sdk
+        run: |
+          pnpm install --frozen-lockfile --filter @tribu/auth...
+          pnpm --filter @tribu/auth build
       - run: npm ci
       - run: npm run lint
+      - run: npm run test
       - run: npm run build
   backend:
     runs-on: ubuntu-latest
