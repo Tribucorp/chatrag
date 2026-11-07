@@ -1,19 +1,28 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, ShieldCheck, MicOff } from "lucide-react";
+import { Send, Loader2, ShieldCheck, Mic, MicOff, Square } from "lucide-react";
 
 // Reemplaza al antiguo VoiceAgent acoplado a ElevenLabs (proveedor cloud, incompatible con la
-// constitución on-prem del Tribu SDK). Ahora consulta al backend RAG del SDK (`/query`) y las
-// respuestas llegan con CITAS VERIFICABLES ya filtradas por ACL en el servidor. La voz queda
-// como stub apagado hasta que se levante el bloqueo legal de tribu-voice (Riva stock, jamás
-// clonación); por eso no se importa ningún SDK de voz cloud aquí.
+// constitución on-prem del Tribu SDK). Consulta al BFF (`/api/chat`, ver
+// src/app/api/chat/route.ts), que reenvía al backend RAG del SDK (`/query`) con la identidad
+// de la sesión y el bearer de servicio — el navegador nunca habla directo con el backend ni
+// declara su propia identidad. Las respuestas llegan con CITAS VERIFICABLES ya filtradas por
+// ACL en el servidor.
+//
+// Voz (Fase C, sobre tribu-voice real — ver backend/src/chatrag_api/voice.py): gateada por
+// NEXT_PUBLIC_VOICE_ENABLED. El micrófono graba con MediaRecorder, se transcribe vía
+// /api/voice/transcribe (ASR propio de ChatRAG, no parte de tribu-voice) y el texto entra al
+// mismo flujo que si se hubiera escrito; la respuesta se lee en voz alta vía /api/voice/speak
+// (TTS real sobre tribu-voice, solo voces stock). El contrato de red con el NIM Riva real está
+// sin verificar (ver docstring de voice.py) — si /api/voice/speak o /transcribe fallan, el chat
+// de texto sigue funcionando igual, la voz nunca bloquea la conversación.
 
 type Citation = { text: string; source_uri: string; title: string; score: number };
 type Answer = { text: string; citations: Citation[]; abstained: boolean };
 type Turn = { role: "user" | "assistant"; content: string; citations?: Citation[] };
+type VoiceSession = { token_id: string; face_id: string; expires_at: number };
 
-const API_BASE = process.env.NEXT_PUBLIC_CHATRAG_API_URL ?? "";
 const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
 
 export function ChatAgent() {
@@ -21,59 +30,156 @@ export function ChatAgent() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns]);
 
-  const send = useCallback(async () => {
-    const question = input.trim();
-    if (!question || loading) return;
-    setInput("");
-    setError("");
-    setTurns((t) => [...t, { role: "user", content: question }]);
-    setLoading(true);
+  const speak = useCallback(async (token: VoiceSession, text: string) => {
     try {
-      const resp = await fetch(`${API_BASE}/query`, {
+      const resp = await fetch("/api/voice/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ token_id: token.token_id, text, emotion: "neutral" }),
       });
-      if (!resp.ok) throw new Error(`El backend respondió ${resp.status}`);
-      const answer: Answer = await resp.json();
-      setTurns((t) => [
-        ...t,
-        { role: "assistant", content: answer.text, citations: answer.citations },
-      ]);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error consultando el asistente");
-    } finally {
-      setLoading(false);
+      if (!resp.ok || !audioRef.current) return;
+      const blob = await resp.blob();
+      audioRef.current.src = URL.createObjectURL(blob);
+      await audioRef.current.play();
+    } catch {
+      // La voz nunca bloquea el chat de texto — un fallo de TTS se ignora en silencio.
     }
-  }, [input, loading]);
+  }, []);
+
+  const send = useCallback(
+    async (questionOverride?: string, voiceToken?: VoiceSession) => {
+      const question = (questionOverride ?? input).trim();
+      if (!question || loading) return;
+      setInput("");
+      setError("");
+      setTurns((t) => [...t, { role: "user", content: question }]);
+      setLoading(true);
+      try {
+        const resp = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question }),
+        });
+        if (!resp.ok) throw new Error(`El backend respondió ${resp.status}`);
+        const answer: Answer = await resp.json();
+        setTurns((t) => [
+          ...t,
+          { role: "assistant", content: answer.text, citations: answer.citations },
+        ]);
+        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, answer.text);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Error consultando el asistente");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [input, loading, speak]
+  );
+
+  const startRecording = useCallback(async () => {
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      setError("No se pudo acceder al micrófono.");
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    setRecording(false);
+    setTranscribing(true);
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      setTranscribing(false);
+      return;
+    }
+    recorder.addEventListener(
+      "stop",
+      () => {
+        void (async () => {
+          try {
+            const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+            const sessionResp = await fetch("/api/voice/session", { method: "POST" });
+            if (!sessionResp.ok) throw new Error("no se pudo abrir sesión de voz");
+            const voiceToken: VoiceSession = await sessionResp.json();
+
+            const transcribeResp = await fetch("/api/voice/transcribe", {
+              method: "POST",
+              headers: { "Content-Type": blob.type, "X-Voice-Token": voiceToken.token_id },
+              body: blob,
+            });
+            if (!transcribeResp.ok) throw new Error("no se pudo transcribir el audio");
+            const { text } = (await transcribeResp.json()) as { text: string };
+            await send(text, voiceToken);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : "Error procesando el audio");
+          } finally {
+            setTranscribing(false);
+          }
+        })();
+      },
+      { once: true }
+    );
+    recorder.stop();
+  }, [send]);
 
   return (
-    <div className="flex w-full max-w-xl flex-col gap-4">
+    <div
+      className="flex w-full max-w-xl flex-col"
+      style={{ gap: "var(--chatrag-gap)" }}
+    >
       <div className="flex items-center justify-center gap-2 text-[11px] text-white/40">
         <ShieldCheck className="h-3.5 w-3.5" />
         Respuestas con citas verificables · RAG on-prem (Tribu SDK)
       </div>
 
-      <div className="min-h-[240px] rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+      <div
+        className="min-h-[240px] rounded-[var(--chatrag-radius)] border border-white/10 bg-white/[0.03]"
+        style={{ padding: "var(--chatrag-padding)" }}
+      >
         {turns.length === 0 ? (
           <p className="py-16 text-center text-sm text-white/40">
             Escribe tu consulta sobre trámites y servicios municipales.
           </p>
         ) : (
-          <ul className="flex flex-col gap-4">
+          <ul className="flex flex-col" style={{ gap: "var(--chatrag-gap)" }}>
             {turns.map((turn, i) => (
               <li key={i} className={turn.role === "user" ? "text-right" : "text-left"}>
                 <div
                   className={
                     turn.role === "user"
-                      ? "inline-block rounded-2xl bg-[#3b82f6]/20 px-4 py-2 text-sm"
-                      : "inline-block rounded-2xl bg-white/[0.06] px-4 py-2 text-sm"
+                      ? "inline-block rounded-[var(--chatrag-radius)] px-4 py-2 text-sm"
+                      : "inline-block rounded-[var(--chatrag-radius)] bg-white/[0.06] px-4 py-2 text-sm"
+                  }
+                  style={
+                    turn.role === "user"
+                      ? {
+                          backgroundColor:
+                            "color-mix(in srgb, var(--chatrag-accent) 20%, transparent)",
+                        }
+                      : undefined
                   }
                 >
                   {turn.content}
@@ -101,7 +207,11 @@ export function ChatAgent() {
         )}
       </div>
 
-      {error && <p className="text-center text-xs text-[#d52b1e]">{error}</p>}
+      {error && (
+        <p className="text-center text-xs" style={{ color: "var(--chatrag-accent-secondary)" }}>
+          {error}
+        </p>
+      )}
 
       <div className="flex items-center gap-2">
         <input
@@ -109,22 +219,42 @@ export function ChatAgent() {
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           placeholder="Escribe tu pregunta…"
-          className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-white/25"
+          className="flex-1 rounded-[var(--chatrag-radius)] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-white/25"
         />
+        {VOICE_ENABLED && (
+          <button
+            onClick={recording ? stopRecording : startRecording}
+            disabled={transcribing || loading}
+            className="flex h-11 w-11 items-center justify-center rounded-[var(--chatrag-radius)] border border-white/10 bg-white/[0.03] disabled:opacity-40"
+            style={recording ? { borderColor: "var(--chatrag-accent-secondary)" } : undefined}
+            aria-label={recording ? "Detener grabación" : "Grabar pregunta por voz"}
+          >
+            {transcribing ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : recording ? (
+              <Square className="h-4 w-4" style={{ color: "var(--chatrag-accent-secondary)" }} />
+            ) : (
+              <Mic className="h-5 w-5" />
+            )}
+          </button>
+        )}
         <button
-          onClick={send}
+          onClick={() => send()}
           disabled={loading}
-          className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#3b82f6] disabled:opacity-40"
+          className="flex h-11 w-11 items-center justify-center rounded-[var(--chatrag-radius)] disabled:opacity-40"
+          style={{ backgroundColor: "var(--chatrag-accent)" }}
           aria-label="Enviar"
         >
           {loading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
         </button>
       </div>
 
-      {!VOICE_ENABLED && (
+      {VOICE_ENABLED ? (
+        <audio ref={audioRef} hidden />
+      ) : (
         <div className="flex items-center justify-center gap-2 text-[11px] text-white/35">
           <MicOff className="h-3.5 w-3.5" />
-          Voz deshabilitada (tribu-voice pendiente de aprobación legal — Riva stock, sin clonación)
+          Voz deshabilitada (NEXT_PUBLIC_VOICE_ENABLED=0) — Riva stock, sin clonación
         </div>
       )}
     </div>
