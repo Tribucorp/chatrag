@@ -1,12 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send, Loader2, ShieldCheck, Mic, MicOff, Square } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Send, Loader2, ShieldCheck, Mic, MicOff, Square, LogOut } from "lucide-react";
+
+import { signOut } from "@/lib/auth-client";
 
 // Reemplaza al antiguo VoiceAgent acoplado a ElevenLabs (proveedor cloud, incompatible con la
 // constitución on-prem del Tribu SDK). Consulta al BFF (`/api/chat`, ver
-// src/app/api/chat/route.ts), que reenvía al backend RAG del SDK (`/query`) con la identidad
-// de la sesión y el bearer de servicio — el navegador nunca habla directo con el backend ni
+// src/app/api/chat/route.ts), que valida la sesión de tribu-auth y reenvía al backend RAG del
+// SDK (`/query`) con la identidad y el bearer de servicio — el navegador nunca habla directo con el backend ni
 // declara su propia identidad. Las respuestas llegan con CITAS VERIFICABLES ya filtradas por
 // ACL en el servidor.
 //
@@ -26,6 +29,7 @@ type VoiceSession = { token_id: string; face_id: string; expires_at: number };
 const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
 
 export function ChatAgent() {
+  const router = useRouter();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -40,6 +44,12 @@ export function ChatAgent() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns]);
+
+  const logout = useCallback(async () => {
+    await signOut();
+    router.push("/login");
+    router.refresh();
+  }, [router]);
 
   const speak = useCallback(async (token: VoiceSession, text: string) => {
     try {
@@ -71,6 +81,11 @@ export function ChatAgent() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ question }),
         });
+        if (resp.status === 401) {
+          // Sesión caducada o cerrada en otra pestaña: volver al login en vez de un error.
+          router.push("/login");
+          return;
+        }
         if (!resp.ok) throw new Error(`El backend respondió ${resp.status}`);
         const answer: Answer = await resp.json();
         setTurns((t) => [
@@ -84,7 +99,7 @@ export function ChatAgent() {
         setLoading(false);
       }
     },
-    [input, loading, speak]
+    [input, loading, speak, router]
   );
 
   const startRecording = useCallback(async () => {
@@ -150,9 +165,19 @@ export function ChatAgent() {
       className="flex w-full max-w-xl flex-col"
       style={{ gap: "var(--chatrag-gap)" }}
     >
-      <div className="flex items-center justify-center gap-2 text-[11px] text-white/40">
-        <ShieldCheck className="h-3.5 w-3.5" />
-        Respuestas con citas verificables · RAG on-prem (Tribu SDK)
+      <div className="flex items-center justify-center gap-3 text-[11px] text-white/40">
+        <span className="flex items-center gap-2">
+          <ShieldCheck className="h-3.5 w-3.5" />
+          Respuestas con citas verificables · RAG on-prem (Tribu SDK)
+        </span>
+        <button
+          type="button"
+          onClick={() => void logout()}
+          className="flex items-center gap-1 underline decoration-white/20 hover:text-white/70"
+        >
+          <LogOut className="h-3 w-3" />
+          Salir
+        </button>
       </div>
 
       <div

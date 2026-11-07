@@ -6,13 +6,25 @@ on:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    # @tribu/auth = npm:@tribucorp/tribu-auth (GitHub Packages, privado de la organización —
+    # ADR-0020 del SDK). Requiere que el paquete dé acceso de lectura a este repo: Settings
+    # del paquete → "Manage Actions access" → Tribucorp/chatrag.
+    permissions:
+      contents: read
+      packages: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: valor solo para que
+      # el build de CI no aborte; nunca sirve tráfico real.
+      CHATRAG_AUTH_SECRET: ci-build-placeholder-no-es-un-secreto-real-0000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
   backend:
     # Instala el SDK DE VERDAD (dependencias git fijadas a un tag, ADR-0020 del SDK) — sin

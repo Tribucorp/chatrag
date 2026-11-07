@@ -6,12 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run"
   },
   "dependencies": {
+    "@tribu/auth": "npm:@tribucorp/tribu-auth@1.0.0",
+    "better-auth": "^1.6.28",
     "lucide-react": "^0.575.0",
     "next": "^16.2.4",
-    "next-auth": "^5.0.0-beta.32",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "server-only": "^0.0.1"
@@ -26,6 +28,7 @@
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   }
 }
