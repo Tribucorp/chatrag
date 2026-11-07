@@ -15,9 +15,9 @@ inventar.
 ```
 Navegador ──► Next.js BFF (src/app/api/chat/route.ts) ──► chatrag-api (FastAPI, backend/)
               │                                             │
-              ├─ Auth.js v5 (src/lib/auth.ts)               ├─ tribu-rag  → NIM embed/rerank on-prem
-              │  deriva X-User-Id/X-User-Acls                ├─ tribu-http → NIM chat on-prem
-              │  (sin provider real todavía — TODO)          └─ filter_by_acl (server-side, fail-closed)
+              ├─ tribu-auth (src/lib/auth.ts)               ├─ tribu-rag  → NIM embed/rerank on-prem
+              │  sesión + rol → X-User-Id/X-User-Acls        ├─ tribu-http → NIM chat on-prem
+              │  (src/lib/acl.ts, src/lib/session.ts)        └─ filter_by_acl (server-side, fail-closed)
               └─ CHATRAG_SERVICE_BEARER_TOKEN
 ```
 
@@ -28,7 +28,7 @@ cita accesible.
 
 ### Qué del SDK está integrado de verdad hoy
 
-Verificado contra el estado real del SDK (no contra lo que un doc diga que "debería" estar):
+Verificado contra el SDK **v1.0.0** (tabla «Estado real por módulo» de su CLAUDE.md, 1-nov-2026) y su código:
 
 | Módulo | Estado |
 |---|---|
@@ -36,19 +36,20 @@ Verificado contra el estado real del SDK (no contra lo que un doc diga que "debe
 | `tribu-http` | **Integrado** — cliente al NIM de chat, egress deny-by-default |
 | `tribu-audit` | **Integrado** — traza de decisión (`backend/src/chatrag_api/audit.py`), cadena WORM HMAC respaldada en Postgres, opt-in |
 | `tribu-guardrails` | **Integrado** — `render_untrusted_as_data` envuelve las citas antes del NIM; `check_lethal_trifecta` corre en `lifespan` |
-| `tribu-auth` | No existe en el registry. Stopgap: Auth.js v5 sin provider (TODO) |
-| `tribu-observability` | No existe — su rol de traza de decisión lo cubre `tribu-audit` (arriba) |
+| `tribu-auth` (TS) | **Integrado** en el frontend (`src/lib/auth.ts`): login email/contraseña, organización + roles → ACLs, rate-limit de login. Sin BD propia todavía (memoryAdapter: se pierde al reiniciar); sin OIDC del ecosistema (no existe en el SDK) |
+| `tribu-observability` | Existe (Parcial: OTel GenAI + MAST, sin Prometheus/Sentry). **No integrado todavía**; la traza de decisión la cubre `tribu-audit` |
 | `tribu-datagov` | Existe; evaluado para el filtro de ACL, no lo reemplaza (defensa en profundidad) |
 | `tribu-voice` | **Integrado** (`backend/src/chatrag_api/voice.py`) — TTS + avatar + token efímero reales; opt-in (`CHATRAG_VOICE_ENABLED`), revisión legal confirmada (ver CLAUDE.md), contrato de red con el NIM Riva sin verificar |
-| `tribu-demo-kit` | No existe todavía |
+| `tribu-demo-kit` | Existe (Parcial, plantilla ARM64 sin verificar). No integrado |
 
 ## Stack
 
 - **Frontend**: Next.js 16 (App Router) + React 19 + Tailwind v4. Chat de texto
   (`src/components/chat-agent.tsx`) contra el BFF propio, sin voz cloud.
 - **Backend** (`backend/`): FastAPI (`chatrag-api`), Python ≥3.11, `uv` para dependencias.
-  Consume los módulos `tribu-*` como wheels del registry privado de Tribucorp — nunca PyPI, nunca
-  vendorizado.
+  Consume los módulos `tribu-*` como **dependencias git fijadas a una tag del SDK** (ADR-0020 del
+  SDK; hoy `v1.0.0`, ver `backend/pyproject.toml`) — nunca PyPI, nunca vendorizado. El frontend
+  consume `@tribu/auth` desde GitHub Packages (`.npmrc`).
 - Sin proveedores cloud de voz ni de LLM: todo corre on-prem contra NIM de NVIDIA.
 
 ## Puesta en marcha (dev local)
@@ -59,18 +60,19 @@ Verificado contra el estado real del SDK (no contra lo que un doc diga que "debe
 #    (ver Settings.from_env en backend/src/chatrag_api/config.py).
 cp .env.example .env.local
 
-# 2. Frontend
+# 2. Frontend — @tribu/auth sale de GitHub Packages (privado de la organización)
+export NODE_AUTH_TOKEN=$(gh auth token)   # token con read:packages
 npm install
 npm run dev                    # http://localhost:3000 (o el siguiente puerto libre)
 
-# 3. Backend — requiere el registry privado del SDK para el árbol de deps completo
+# 3. Backend — el SDK es un repo privado: basta acceso a la organización (`gh auth setup-git`).
+#    tribu-audit y tribu-crypto tienen núcleo Rust: hace falta cargo.
 cd backend
-uv venv --python 3.12
-uv pip install -e .            # instala tribu-http/tribu-rag/tribu-audit/tribu-guardrails/tribu-voice desde el índice `tribu` (ver pyproject.toml)
+uv sync                        # instala tribu-* desde git (tag fijada en pyproject.toml, uv.lock)
 uv run uvicorn chatrag_api.app:create_app --factory --reload --port 8080
 ```
 
-Sin acceso al registry privado ni a los NIM on-prem, el backend **no arranca en producción**
+Sin los NIM on-prem ni Milvus, el backend **no arranca en producción**
 (`tribu_rag_retriever`/`tribu_nim_chat_generator` se construyen perezosamente en `startup`), pero
 sí se puede desarrollar y testear: `create_app(retriever=..., generator=...)` acepta dobles
 inyectados, que es exactamente lo que usan los tests (`backend/tests/`).
@@ -79,14 +81,21 @@ inyectados, que es exactamente lo que usan los tests (`backend/tests/`).
 
 ```bash
 cd backend
-uv run pytest tests -q                # unitario, sin registry (por defecto excluye `integration`)
-uv run pytest tests -m integration -q # requiere tribu-rag/tribu-http instalados de verdad
+uv run pytest tests -q                # unitario (por defecto excluye `integration`)
+uv run pytest tests -m "" -q          # todo, incluida la integración con el SDK real
+# Los 2 tests de tribu-audit necesitan Postgres: CHATRAG_TEST_AUDIT_DATABASE_URL=postgresql://...
+npm test                              # frontend (vitest)
 ```
 
-CI (`.github/workflows/ci.yml`) corre tres jobs: `frontend` (lint + build), `backend` (ruff +
-mypy --strict + pytest unitario, sin tocar el registry) y `backend-integration` (instala los
-wheels reales + levanta un Postgres efímero para las pruebas de `tribu-audit`; solo corre si el
-secret `UV_INDEX_TRIBU_URL` está configurado).
+CI (`.github/workflows/ci.yml`) corre dos jobs:
+
+- `frontend`: `npm ci` (con `@tribu/auth` de GitHub Packages, vía `GITHUB_TOKEN`), lint,
+  vitest y build. Requiere que el paquete `tribu-auth` dé acceso a este repo (Settings del
+  paquete → *Manage Actions access*).
+- `backend`: instala el SDK de verdad (`uv sync --frozen`), ruff, mypy --strict y pytest
+  completo (unitario + integración, con un Postgres efímero para `tribu-audit`). Requiere el
+  secret `TRIBU_SDK_PAT` (PAT fine-grained, `contents: read` sobre `Tribucorp/tribu-sdk`);
+  sin él falla, no pasa en verde sin haber probado el SDK.
 
 ## Traza de decisión (`tribu-audit`)
 
@@ -95,13 +104,22 @@ Opt-in — sin `CHATRAG_AUDIT_DATABASE_URL`/`CHATRAG_AUDIT_CHAIN_KEY` (hex), el 
 `/query` queda anclado en una cadena WORM HMAC real (`tribu_audit.AuditChain`, respaldada en
 Postgres) con qué se mostró y qué se bloqueó por ACL — ver `backend/src/chatrag_api/audit.py`.
 
-## Identidad (estado actual)
+## Identidad (`tribu-auth`)
 
-`src/lib/auth.ts` trae el scaffold de Auth.js v5 (sesión JWT, `CHATRAG_AUTH_SECRET`) pero **sin
-provider configurado todavía** — no hay SSO/OIDC del ecosistema Tribucorp confirmado para este
-producto. Hasta que se añada, `auth()` siempre devuelve `null`, el BFF no manda
-`X-User-Id`/`X-User-Acls`, y el backend responde 401 (fail-closed) salvo que actives
-`CHATRAG_DEV_IDENTITY_BYPASS` en el backend — **solo para desarrollo local, nunca en producción**.
+`src/lib/auth.ts` instancia `createTribuAuth` (better-auth + organizations + accessControl) con
+los roles de ChatRAG (`src/lib/acl.ts`: `member`, `rrhhStaff`, `finanzasStaff`,
+`municipalAdmin`). El BFF (`src/lib/session.ts`) valida la sesión, resuelve el rol del usuario
+en la organización `comuna-santiago` y lo traduce a `X-User-Acls`; sin sesión, 401. La home
+redirige a `/login` sin sesión.
+
+- `CHATRAG_AUTH_SECRET` obligatorio (fail-closed, sin default).
+- `CHATRAG_AUTH_DEMO_SEED=1` crea la organización y 4 cuentas demo con contraseña pública —
+  **solo demo**. Sin él, cualquiera puede registrarse pero solo ve citas públicas.
+- Pendiente: BD real (hoy memoryAdapter: usuarios y sesiones se pierden al reiniciar) y una vía
+  para asignar roles fuera del seed demo.
+
+`CHATRAG_DEV_IDENTITY_BYPASS` en el backend sigue existiendo para llamar a `chatrag-api` sin el
+frontend — **solo desarrollo local, nunca en producción**.
 
 ## Administración (`/admin`, `/admin/theme`)
 

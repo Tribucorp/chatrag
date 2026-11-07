@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Fase D — despliegue de ChatRAG en una DGX Spark, offline. Se ejecuta DESDE EL MAC (no desde
 # el Spark). Adapta t6_sesion_spark.sh de tribu-sdk (mismo patrón de fases por SSH, idempotente,
-# se puede relanzar) a lo que ChatRAG necesita: construir los wheels tribu-* desde el código
-# fuente (el registry privado no es alcanzable desde este Spark, ver deploy/Dockerfile.backend)
-# en vez de un `uv sync` normal contra el índice `tribu`.
+# se puede relanzar) a lo que ChatRAG necesita: construir los wheels tribu-* desde la tag del
+# SDK que fija backend/pyproject.toml (el Spark no tiene credenciales git para resolver las
+# dependencias git de ADR-0020, ver deploy/Dockerfile.backend) en vez de un `uv sync` normal.
 #
 # Uso:
 #   bash deploy/despliegue_spark.sh            # todas las fases en orden
@@ -52,21 +52,39 @@ if corre 1; then
   ok "GPU visible, runtime NVIDIA, ${LIBRE}G libres"
 fi
 
-# ── FASE 2 · Wheels tribu-* construidos desde el código fuente ──────────────
+# ── FASE 2 · Wheels tribu-* construidos desde el tag del SDK ────────────────
+# El Spark no tiene credenciales git de Tribucorp (deliberado), así que no puede resolver las
+# dependencias git de backend/pyproject.toml (ADR-0020 del SDK). Los wheels se construyen desde
+# un `git archive` del MISMO tag que fija uv.lock — nunca desde el checkout de trabajo del SDK,
+# que puede ir por delante o por detrás de la release probada en CI.
 if corre 2; then
-  azul "FASE 2 · Wheels tribu-* (registry privado NO alcanzable desde este Spark — ver deploy/Dockerfile.backend)"
-  mkdir -p "$LOCAL_REPO/deploy/wheels"
+  SDK_TAG=$(grep -m1 -o 'tag = "v[0-9.]*"' "$LOCAL_REPO/backend/pyproject.toml" | cut -d'"' -f2)
+  [ -n "$SDK_TAG" ] || fallo "no encuentro la tag del SDK en backend/pyproject.toml"
+  azul "FASE 2 · Wheels tribu-* desde tribu-sdk@$SDK_TAG"
+  git -C "$LOCAL_SDK" fetch -q --tags origin || fallo "no pude traer las tags de tribu-sdk"
+  EXPORT="$(mktemp -d)/tribu-sdk-$SDK_TAG"; mkdir -p "$EXPORT"
+  git -C "$LOCAL_SDK" archive "$SDK_TAG" python rust Cargo.toml Cargo.lock rust-toolchain.toml \
+    | tar -x -C "$EXPORT" || fallo "git archive $SDK_TAG"
+  rm -rf "$LOCAL_REPO/deploy/wheels"; mkdir -p "$LOCAL_REPO/deploy/wheels"
   echo "  → 4 wheels puros (portables, se construyen en el Mac): tribu-http/tribu-rag/tribu-guardrails/tribu-voice"
-  ( cd "$LOCAL_SDK" && uv build --package tribu-http --package tribu-rag \
-      --package tribu-guardrails --package tribu-voice -o "$LOCAL_REPO/deploy/wheels" 2>&1 | tail -8 )
-  echo "  → tribu-audit tiene una extensión nativa (PyO3/Rust): se construye EN el Spark (aarch64 Linux), no en el Mac"
-  sh_spark "command -v cargo >/dev/null" || fallo "falta Rust en el Spark — curl -LsSf https://sh.rustup.rs | sh -s -- -y"
+  for PKG in tribu-http tribu-rag tribu-guardrails tribu-voice; do
+    ( cd "$EXPORT/python/$PKG" && uv build --wheel -o "$LOCAL_REPO/deploy/wheels" 2>&1 | tail -1 ) \
+      || fallo "build de $PKG"
+  done
+  echo "  → tribu-audit y tribu-crypto tienen núcleo Rust (PyO3): se construyen EN el Spark (aarch64 Linux)"
+  sh_spark "command -v cargo >/dev/null || [ -x \$HOME/.cargo/bin/cargo ]" || fallo "falta Rust en el Spark — curl -LsSf https://sh.rustup.rs | sh -s -- -y"
   sh_spark "command -v \$HOME/.local/bin/uv >/dev/null" || fallo "falta uv en el Spark — curl -LsSf https://astral.sh/uv/install.sh | sh"
-  sh_spark "cd $SDK_DIR && \$HOME/.local/bin/uv build --package tribu-audit -o /tmp/chatrag-wheels 2>&1 | tail -8"
-  scp -i "$SPARK_KEY" "$SPARK_SSH:/tmp/chatrag-wheels/tribu_audit-0.1.0-*.whl" "$LOCAL_REPO/deploy/wheels/" \
-    || fallo "no pude traer el wheel de tribu-audit del Spark"
+  sh_spark "rm -rf /tmp/chatrag-sdk /tmp/chatrag-wheels && mkdir -p /tmp/chatrag-sdk"
+  tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
+  for PKG in tribu-audit tribu-crypto; do
+    sh_spark "cd /tmp/chatrag-sdk/python/$PKG && PATH=\$HOME/.cargo/bin:\$PATH \$HOME/.local/bin/uv build --wheel -o /tmp/chatrag-wheels 2>&1 | tail -1" \
+      || fallo "build de $PKG en el Spark"
+  done
+  scp -i "$SPARK_KEY" "$SPARK_SSH:/tmp/chatrag-wheels/*.whl" "$LOCAL_REPO/deploy/wheels/" \
+    || fallo "no pude traer los wheels nativos del Spark"
   ls "$LOCAL_REPO/deploy/wheels"/*.whl | sed 's/^/  /'
-  ok "5 wheels tribu-* listos en deploy/wheels/ (no versionados, ver .gitignore)"
+  [ "$(ls "$LOCAL_REPO/deploy/wheels"/*.whl | wc -l)" -eq 6 ] || fallo "esperaba 6 wheels tribu-*"
+  ok "6 wheels tribu-* de $SDK_TAG en deploy/wheels/ (no versionados, ver .gitignore)"
 fi
 
 # ── FASE 3 · Repos en el Spark (rsync — sin credenciales git en el Spark) ───
@@ -98,7 +116,11 @@ fi
 if corre 5; then
   azul "FASE 5 · docker compose (build + up)"
   sh_spark "cat > $REPO_DIR/deploy/.env.chatrag-spark && chmod 600 $REPO_DIR/deploy/.env.chatrag-spark" < "$ENVFILE"
-  sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml build"
+  # @tribu/auth (frontend) sale de GitHub Packages: token read:packages del Mac (gh) enviado por
+  # stdin — nunca en la línea de comandos remota (visible en `ps`) ni escrito a disco en el Spark.
+  NPM_TOKEN="${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+  [ -n "$NPM_TOKEN" ] || fallo "sin token para GitHub Packages: exporta NODE_AUTH_TOKEN o haz gh auth login"
+  printf '%s' "$NPM_TOKEN" | sh_spark "cd $REPO_DIR && NODE_AUTH_TOKEN=\$(cat) docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml build"
   sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml up -d"
   echo "  → esperando salud de los servicios (el primer arranque de un NIM descarga el modelo: puede tardar)"
   for i in $(seq 1 90); do

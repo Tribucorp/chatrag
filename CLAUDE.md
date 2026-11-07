@@ -23,19 +23,25 @@ Tribu SDK** — su feedback define la DX del SDK.
   memoria — `conversations.py` — distinto del audit trail), todos protegidos por
   `CHATRAG_ADMIN_TOKEN`.
 - **Backend** (`backend/`): FastAPI (`chatrag-api`) que consume los módulos del SDK como
-  **wheels del registry privado** (nunca vendorizar ni copiar código del SDK). Estado real
-  verificado vía `tribu_maestro_estado_sdk` (SDK en fase **S0**) — no asumir que un módulo
-  existe solo porque se documentó aquí antes:
+  **dependencias git fijadas a una tag** (ADR-0020 del SDK, `docs/CONSUMIR_EL_SDK.md`; hoy
+  **v1.0.0**, misma tag en todas las líneas de `[tool.uv.sources]`) — nunca vendorizar ni
+  copiar código del SDK. `registry.tribucorp.internal` **nunca existió**; no reintroducirlo.
+  Estado real: tabla «Estado real por módulo» del CLAUDE.md del SDK (se actualiza en cada
+  release) — no asumir que un módulo existe, o no, solo porque se documentó aquí antes:
   - `tribu-rag` — recuperación híbrida (dimensión **2048**, guard dinámico), pre-filtrado por
-    tenant, Contextual Retrieval. **Integrado** (único dependency real en `pyproject.toml`
-    junto con `tribu-http`).
+    tenant, Contextual Retrieval. **Integrado** (`rag.py`, `ingest.py`). No hay un
+    `HybridRetriever` en el SDK: la composición embed → Milvus híbrido → rerank es del producto.
   - `tribu-http` — cliente único, **egress deny-by-default** hacia los NIM on-prem. **Integrado**.
-  - `tribu-auth` — SSO; produciría el `UserContext` (identidad + ACLs). **No existe todavía en
-    el registry.** Stopgap mientras tanto: el BFF del frontend (`src/app/api/chat/route.ts`)
-    corre Auth.js v5 (`src/lib/auth.ts`, sin provider configurado — TODO) y pasa
-    `X-User-Id`/`X-User-Acls` al backend, que confía en ellas (`current_user` en `app.py`).
-  - `tribu-observability` — **no existe todavía**. `tribu-audit` cubre la traza de decisión en
-    su lugar (cadena WORM HMAC real vía PyO3). **Integrado** (`audit.py`): API confirmada
+  - `tribu-auth` — paquete **TypeScript** (`@tribu/auth` = `npm:@tribucorp/tribu-auth`, GitHub
+    Packages, `.npmrc`). **Integrado en el frontend** (`src/lib/auth.ts`, `createTribuAuth`):
+    login, organización + roles (`src/lib/acl.ts`, única tabla rol → ACL). El BFF
+    (`src/lib/session.ts`) valida la sesión y pasa `X-User-Id`/`X-User-Acls` al backend, que
+    confía en ellas solo con el bearer de servicio (`current_user` en `app.py`). Pendiente: BD
+    real (hoy memoryAdapter) y OIDC del ecosistema (no existe en el SDK). Cuentas demo solo con
+    `CHATRAG_AUTH_DEMO_SEED=1`.
+  - `tribu-observability` — existe (Parcial en v1.0.0), **no integrado**; la traza de decisión
+    la cubre `tribu-audit`.
+  - `tribu-audit` — cadena WORM HMAC real vía PyO3. **Integrado** (`audit.py`): API confirmada
     leyendo el código fuente real del SDK en disco (`~/repositorio/tribu-sdk/python/`, no el
     corpus de x9 — se rehusó por falta de referencia documentada). Opt-in vía
     `CHATRAG_AUDIT_DATABASE_URL`/`CHATRAG_AUDIT_CHAIN_KEY` (Postgres respalda el `AuditChain`
@@ -62,7 +68,7 @@ Tribu SDK** — su feedback define la DX del SDK.
     texto — ASR no es parte de `tribu-voice`). Contrato de red con el NIM Riva real **sin
     verificar** — no hay ninguna imagen NIM de Riva pineada en el SDK; ver docstring de
     `voice.py`.
-  - `tribu-demo-kit` — **no existe todavía** (Milestone #2 del SDK, objetivo 2026-09-02).
+  - `tribu-demo-kit` — existe (Parcial en v1.0.0, plantilla ARM64 sin verificar), no integrado.
 
 ## Reglas propias (además de las del SDK)
 

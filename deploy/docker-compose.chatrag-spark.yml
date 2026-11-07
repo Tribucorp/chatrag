@@ -200,6 +200,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
+      # @tribu/auth desde GitHub Packages: token read:packages SOLO en el build (secreto de
+      # BuildKit, no queda en la imagen). `export NODE_AUTH_TOKEN=...` antes de `compose build`.
+      secrets:
+        - node_auth_token
     restart: unless-stopped
     depends_on:
       chatrag-api:
@@ -209,6 +213,8 @@ services:
       CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
       CHATRAG_AUTH_SECRET: ${CHATRAG_AUTH_SECRET:?falta CHATRAG_AUTH_SECRET}
       CHATRAG_AUTH_URL: ${CHATRAG_AUTH_URL:?falta CHATRAG_AUTH_URL}
+      # Cuentas demo con contraseña pública (src/lib/seed-demo.ts): solo para la demo, opt-in.
+      CHATRAG_AUTH_DEMO_SEED: ${CHATRAG_AUTH_DEMO_SEED:-0}
       NEXT_PUBLIC_VOICE_ENABLED: "0"
       NEXT_PUBLIC_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
     ports:
@@ -222,3 +228,7 @@ volumes:
   nim-rerank-cache:
   chatrag-knowledge:
   chatrag-data:
+
+secrets:
+  node_auth_token:
+    environment: NODE_AUTH_TOKEN
