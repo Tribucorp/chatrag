@@ -28,3 +28,41 @@ jobs:
       - run: uv run --no-sync ruff check src tests
       - run: uv run --no-sync mypy --strict src/chatrag_api
       - run: uv run --no-sync pytest tests -q
+  backend-integration:
+    # Instala tribu-http/tribu-rag/tribu-audit/tribu-guardrails/tribu-voice DE VERDAD desde el registry
+    # privado (sin --no-deps, a diferencia del job `backend`), para detectar en CI lo que este
+    # repo tenía roto hasta ahora: dependencias tribu-* fijadas en pyproject.toml que no
+    # resuelven contra el registry. Gateado por el secret del índice: no corre en PRs de forks
+    # sin acceso a él. El servicio `postgres` respalda las pruebas de tribu-audit (ver
+    # backend/tests/test_audit_integration.py) — efímero, solo vive en el job.
+    runs-on: ubuntu-latest
+    if: ${{ secrets.UV_INDEX_TRIBU_URL != '' }}
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chatrag
+          POSTGRES_PASSWORD: chatrag
+          POSTGRES_DB: chatrag_audit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      UV_INDEX_TRIBU_URL: ${{ secrets.UV_INDEX_TRIBU_URL }}
+      UV_INDEX_TRIBU_USERNAME: ${{ secrets.UV_INDEX_TRIBU_USERNAME }}
+      UV_INDEX_TRIBU_PASSWORD: ${{ secrets.UV_INDEX_TRIBU_PASSWORD }}
+      CHATRAG_TEST_AUDIT_DATABASE_URL: postgresql://chatrag:chatrag@localhost:5432/chatrag_audit_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv venv --python 3.12
+      - run: uv pip install pytest pytest-asyncio
+      - run: uv pip install -e .
+      - run: uv run --no-sync pytest tests -m integration -q
