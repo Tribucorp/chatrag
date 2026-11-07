@@ -9,13 +9,30 @@ dependencies = [
     "pydantic>=2.7",
     # --- Tribu SDK (wheels Nuitka del registry privado de Tribucorp, NO PyPI) ---
     # Se instalan con el indice privado configurado (ver [tool.uv] abajo). Pin estricto,
-    # nunca 'latest' (regla del SDK). tribu-voice va tras flag apagado (bloqueo legal NVIDIA).
+    # nunca 'latest' (regla del SDK). Solo se declaran los modulos que el SDK publica hoy
+    # (fase S0 del SDK, ver tribu_maestro_estado_sdk): tribu-observability, tribu-auth
+    # y tribu-demo-kit NO existen todavia en el registry, asi que fijarlos aqui rompe
+    # `uv sync` de verdad (CI lo esquiva con --no-deps, lo que ocultaba el problema).
+    # Volver a añadir cada uno cuando el SDK lo publique (confirmar con el equipo del SDK,
+    # no solo con este comentario).
     "tribu-http>=0.1,<0.2",
-    "tribu-observability>=0.1,<0.2",
-    "tribu-auth>=0.1,<0.2",
     "tribu-rag>=0.1,<0.2",
+    # tribu-audit, tribu-guardrails y tribu-voice SI existen hoy (fase S0) -- API confirmada
+    # leyendo el codigo fuente real del SDK en disco (~/repositorio/tribu-sdk/python/), no el
+    # corpus de x9 (se rehuso por falta de referencia documentada). Ver audit.py,
+    # rag.py::_TribuNimChatGenerator.generate, y voice.py.
+    "tribu-audit>=0.1,<0.2",
+    "tribu-guardrails>=0.1,<0.2",
     "tribu-voice>=0.1,<0.2",
-    "tribu-demo-kit>=0.1,<0.2",
+    # --- PyPI normal, no del registry privado ---
+    # Respalda tribu_audit.AuditChain en Postgres (ver audit.py) -- opt-in, solo se usa si
+    # CHATRAG_AUDIT_DATABASE_URL/CHATRAG_AUDIT_CHAIN_KEY estan configuradas.
+    "asyncpg>=0.29",
+    # Cliente del vector store real de tribu-rag (tribu_rag.milvus_store.MilvusVectorStore
+    # envuelve pymilvus, pero pymilvus mismo sigue siendo una dependencia directa del backend
+    # que lo usa -- no es opcional, es la ruta real de /query y de la ingesta en produccion,
+    # ver rag.py::tribu_rag_retriever e ingest.py::TribuRagIngestor).
+    "pymilvus>=2.5",
 ]
 
 [dependency-groups]
@@ -37,11 +54,10 @@ explicit = true
 
 [tool.uv.sources]
 tribu-http = { index = "tribu" }
-tribu-observability = { index = "tribu" }
-tribu-auth = { index = "tribu" }
 tribu-rag = { index = "tribu" }
+tribu-audit = { index = "tribu" }
+tribu-guardrails = { index = "tribu" }
 tribu-voice = { index = "tribu" }
-tribu-demo-kit = { index = "tribu" }
 
 [build-system]
 requires = ["hatchling"]
@@ -52,6 +68,10 @@ packages = ["src/chatrag_api"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: requiere el registry privado del SDK instalado de verdad (ver .github/workflows/ci.yml, job backend-integration); no corre en el job unitario.",
+]
+addopts = "-m 'not integration'"
 
 [tool.ruff]
 line-length = 100

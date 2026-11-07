@@ -5,12 +5,16 @@ from chatrag_api.rag import answer_query, filter_by_acl
 
 
 class FakeRetriever:
-    """Retriever de prueba: devuelve una lista fija, sin tocar tribu-rag ni el registry."""
+    """Retriever de prueba: devuelve una lista fija, sin tocar tribu-rag ni el registry.
+    `requester_roles` se acepta (mismo Protocol que el real) pero se ignora aquí a propósito —
+    el filtrado real por rol se prueba vía `filter_by_acl`, no en este doble."""
 
     def __init__(self, citations: Sequence[Citation]) -> None:
         self._citations = list(citations)
 
-    def retrieve(self, question: str, *, top_k: int) -> Sequence[Citation]:
+    async def retrieve(
+        self, question: str, *, top_k: int, requester_roles: frozenset[str]
+    ) -> Sequence[Citation]:
         return self._citations[:top_k]
 
 
@@ -26,7 +30,13 @@ class FakeGenerator:
 
 
 def _c(uri: str, *, acl: str | None = None, score: float = 0.5, text: str = "x") -> Citation:
-    return Citation(text=text, source_uri=uri, title=uri, score=score, required_acl=acl)
+    return Citation(
+        text=text,
+        source_uri=uri,
+        title=uri,
+        score=score,
+        required_acl=frozenset({acl}) if acl else frozenset(),
+    )
 
 
 # --- filter_by_acl ------------------------------------------------------------------------
