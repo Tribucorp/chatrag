@@ -66,6 +66,15 @@ jobs:
             echo "::error::Falta el secret TRIBU_SDK_PAT (contents:read sobre Tribucorp/tribu-sdk)"
             exit 1
           fi
+          # Diagnóstico explícito (nunca imprime el token): 401 = token inválido/caducado;
+          # 403 = pendiente de aprobación de la org o sin permiso Contents; 404 = el token no
+          # ve el repo (resource owner distinto de Tribucorp o repo no seleccionado).
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${TRIBU_SDK_PAT}" \
+            https://api.github.com/repos/Tribucorp/tribu-sdk/contents/README.md)
+          if [ "$code" != "200" ]; then
+            echo "::error::TRIBU_SDK_PAT no puede leer Tribucorp/tribu-sdk (HTTP $code)"
+            exit 1
+          fi
           git config --global url."https://x-access-token:${TRIBU_SDK_PAT}@github.com/".insteadOf "https://github.com/"
       - uses: astral-sh/setup-uv@v3
       # tribu-audit y tribu-crypto tienen núcleo Rust (maturin): rustup/cargo ya vienen en
