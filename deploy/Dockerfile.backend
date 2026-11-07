@@ -1,0 +1,55 @@
+# Imagen de producción de chatrag-api (Fase D, DGX Spark). DESVIACIÓN DELIBERADA del `uv sync`
+# normal (README/CI): ni este Mac ni spark-da29 resuelven registry.tribucorp.internal (el
+# registry privado de wheels del SDK — probado con `getent hosts`/`curl` desde ambos, ninguno
+# resuelve), así que `uv sync` contra el índice `tribu` de pyproject.toml no puede completarse
+# en este Spark hoy. Los 5 wheels tribu-* se construyen aparte, desde el código fuente real de
+# ~/repositorio/tribu-sdk (la misma fuente que ya es la referencia de toda esta integración —
+# no vendorizado dentro de este repo, ver deploy/despliegue_spark.sh fase 2) y se copian al
+# contexto de build como deploy/wheels/*.whl antes de `docker build`. Mismas versiones exactas
+# (0.1.0) que satisfacen los rangos `>=0.1,<0.2` de pyproject.toml.
+#
+# tribu-audit tiene una extensión nativa (PyO3/Rust — ver su pyproject.toml) y por tanto es
+# NO portable entre plataformas: su wheel se compila en el propio Spark (aarch64 Linux), nunca
+# en el Mac (macOS arm64) — un wheel `cp311-abi3-macosx_11_0_arm64` no cargaría aquí. Los otros
+# 4 (tribu-http/tribu-rag/tribu-guardrails/tribu-voice) son Python puro (`py3-none-any`),
+# portables desde cualquier máquina.
+#
+# Cuando el registry privado esté accesible desde el Spark, este Dockerfile vuelve al patrón
+# normal (`uv sync --frozen` contra pyproject.toml, sin este stage de wheels locales) — no
+# hay nada aquí que dependa de mantenerse así a largo plazo.
+
+FROM python:3.12-slim AS build
+WORKDIR /app
+RUN pip install --no-cache-dir uv
+COPY backend/pyproject.toml backend/README.md* ./
+COPY backend/src ./src
+COPY deploy/wheels ./wheels
+# Los tribu-* vienen de ./wheels (ver docstring arriba), el resto de PyPI normal. `--no-deps`
+# en el segundo paso: los deps de chatrag_api ya quedaron satisfechos por el primer install,
+# no hace falta que uv vuelva a resolver el índice `tribu` (que fallaría, sin red al registry).
+RUN uv venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN uv pip install --no-cache \
+        fastapi>=0.115 "uvicorn[standard]>=0.30" "pydantic>=2.7" "asyncpg>=0.29" "pymilvus>=2.5" \
+        ./wheels/tribu_http-0.1.0-py3-none-any.whl \
+        ./wheels/tribu_rag-0.1.0-py3-none-any.whl \
+        ./wheels/tribu_audit-0.1.0-*.whl \
+        ./wheels/tribu_guardrails-0.1.0-py3-none-any.whl \
+        ./wheels/tribu_voice-0.1.0-py3-none-any.whl \
+    && uv pip install --no-cache --no-deps -e .
+
+FROM python:3.12-slim AS run
+WORKDIR /app
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /app/src /app/src
+COPY backend/pyproject.toml /app/pyproject.toml
+# Seed inicial del corpus (ver el servicio seed-knowledge en docker-compose.chatrag-spark.yml):
+# copiado UNA VEZ al volumen con nombre /knowledge si está vacío, nunca pisa documentos subidos
+# después vía POST /admin/sources — este directorio en la imagen es solo el punto de partida.
+COPY knowledge /seed-knowledge
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8080
+CMD ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

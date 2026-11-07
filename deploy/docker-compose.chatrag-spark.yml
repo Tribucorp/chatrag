@@ -1,0 +1,224 @@
+# Fase D — despliegue on-prem de ChatRAG en una DGX Spark, offline (sin APIs cloud). Adapta
+# DIRECTAMENTE el patrón real y ya probado en producción de
+# ~/repositorio/tribu-sdk/deploy/docker-compose.maestro.yml (sirve a x9 en spark-69f8 hoy) — no
+# se reinventa nada de lo que ese fichero ya resolvió en real (permisos de caché de los NIM,
+# orden de arranque para evitar CUDA OOM, guardas de bind solo-loopback). Diferencias
+# deliberadas frente al maestro:
+#   - 3 NIM (chat/embed/rerank), no 4: ChatRAG no necesita un segundo modelo "juez"
+#     (nim-lightning es específico del patrón de verificación de x9, B-... issue #91/#96).
+#   - Sin Riva (voz): no hay ninguna imagen NIM de Riva pineada en el SDK todavía (ver
+#     backend/src/chatrag_api/voice.py) — CHATRAG_VOICE_ENABLED queda en 0 hasta que exista.
+#   - chatrag-api y el frontend Next.js SÍ corren aquí como contenedores propios (el maestro no
+#     empaqueta ningún consumidor, solo sus dependencias — tribu-mcp-server lo invoca por SSH).
+#
+# Uso:
+#   cp deploy/.env.chatrag-spark.example deploy/.env.chatrag-spark   # rellenar con valores reales
+#   docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml up -d
+#
+# Requiere deploy/wheels/*.whl ya construidos (ver deploy/despliegue_spark.sh fase 2) antes del
+# primer build de chatrag-api — el registry privado del SDK no es alcanzable desde este Spark
+# hoy (ver docstring de deploy/Dockerfile.backend).
+
+include:
+  - path: ../../tribu-sdk/python/tribu-rag/deploy/docker-compose.milvus.yml
+
+services:
+  # Mismo hallazgo real que el maestro (17-ago-2026): un volumen con nombre nuevo lo crea
+  # Docker root:root, y el NIM (que corre como UID 1000 "nvs" dentro del contenedor) crashea
+  # al intentar escribir su caché de modelo ahí. Se corrige el propietario una sola vez, antes
+  # de que los NIM arranquen.
+  fix-nim-cache-perms:
+    image: busybox:1.36
+    command: ["sh", "-c", "chown -R 1000:1000 /chat-cache /embed-cache /rerank-cache"]
+    volumes:
+      - nim-chat-cache:/chat-cache
+      - nim-embed-cache:/embed-cache
+      - nim-rerank-cache:/rerank-cache
+    restart: "no"
+
+  nim-chat:
+    image: ${NIM_CHAT_IMAGE:?falta NIM_CHAT_IMAGE — ver deploy/.env.chatrag-spark.example}
+    restart: unless-stopped
+    depends_on:
+      fix-nim-cache-perms:
+        condition: service_completed_successfully
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:?falta NGC_API_KEY — ver deploy/.env.chatrag-spark.example}
+      NIM_TELEMETRY_MODE: "0"
+      # Mismos valores medidos en real contra este modelo en el maestro (ver su docstring,
+      # 27-ago-2026) — arranca primero a propósito (issue #111 del maestro: NIM_GPU_MEM_FRACTION
+      # se aplica sobre la memoria LIBRE en el momento del arranque de CADA NIM, no sobre el
+      # total; el primero en arrancar es el único con la fracción garantizada completa).
+      NIM_GPU_MEM_FRACTION: "0.40"
+      NIM_MAX_MODEL_LEN: "32768"
+    volumes:
+      - nim-chat-cache:/opt/nim/.cache
+    ports:
+      # Solo loopback por defecto — para alcance real desde otra máquina de la tailnet, fija
+      # esto a la IP Tailscale real del Spark (`tailscale ip -4`, ejecutado EN el Spark). Nunca
+      # "0.0.0.0": eso expondría el NIM en cualquier interfaz, no solo la tailnet.
+      - "${NIM_CHAT_BIND_HOST:-127.0.0.1}:8004:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health/ready"]
+      interval: 30s
+      start_period: 300s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  nim-embed:
+    image: ${NIM_EMBED_IMAGE:?falta NIM_EMBED_IMAGE — ver deploy/.env.chatrag-spark.example}
+    restart: unless-stopped
+    depends_on:
+      fix-nim-cache-perms:
+        condition: service_completed_successfully
+      nim-chat:
+        condition: service_healthy
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:?falta NGC_API_KEY — ver deploy/.env.chatrag-spark.example}
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - nim-embed-cache:/opt/nim/.cache
+    ports:
+      - "127.0.0.1:8002:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health/ready"]
+      interval: 30s
+      start_period: 180s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  nim-rerank:
+    image: ${NIM_RERANK_IMAGE:?falta NIM_RERANK_IMAGE — ver deploy/.env.chatrag-spark.example}
+    restart: unless-stopped
+    depends_on:
+      fix-nim-cache-perms:
+        condition: service_completed_successfully
+      nim-chat:
+        condition: service_healthy
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY:?falta NGC_API_KEY — ver deploy/.env.chatrag-spark.example}
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - nim-rerank-cache:/opt/nim/.cache
+    ports:
+      - "127.0.0.1:8003:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/v1/health/ready"]
+      interval: 30s
+      start_period: 180s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # Seed inicial de knowledge/*.md (baked en la imagen de chatrag-api en /seed-knowledge, ver
+  # deploy/Dockerfile.backend) dentro del volumen con nombre — mismo patrón init-container que
+  # fix-nim-cache-perms arriba, evita una ruta de host en `volumes:`. Solo copia si el volumen
+  # está vacío (no pisa documentos subidos después vía POST /admin/sources).
+  seed-knowledge:
+    image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
+    command: ["sh", "-c", "[ -n \"$$(ls -A /knowledge 2>/dev/null)\" ] || cp -r /seed-knowledge/. /knowledge/"]
+    volumes:
+      - chatrag-knowledge:/knowledge
+    restart: "no"
+
+  chatrag-api:
+    image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    depends_on:
+      seed-knowledge:
+        condition: service_completed_successfully
+      nim-chat:
+        condition: service_healthy
+      nim-embed:
+        condition: service_healthy
+      nim-rerank:
+        condition: service_healthy
+    environment:
+      CHATRAG_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
+      CHATRAG_EMBED_DIM: "2048"
+      CHATRAG_TENANT_ID: ${CHATRAG_TENANT_ID:-chatrag-santiago}
+      # Nombres de servicio del propio compose (red interna) — no localhost, no el puerto
+      # publicado en el host (ese solo sirve para curl manual desde el Spark, ver ports: arriba).
+      CHATRAG_MILVUS_URI: http://milvus-standalone:19530
+      CHATRAG_NIM_EMBED_URL: http://nim-embed:8000
+      CHATRAG_NIM_RERANK_URL: http://nim-rerank:8000
+      CHATRAG_NIM_CHAT_URL: http://nim-chat:8000
+      CHATRAG_NIM_EMBED_MODEL_ID: ${CHATRAG_NIM_EMBED_MODEL_ID:-nvidia/llama-nemotron-embed-1b-v2}
+      CHATRAG_NIM_RERANK_MODEL_ID: ${CHATRAG_NIM_RERANK_MODEL_ID:-nvidia/llama-nemotron-rerank-vl-1b-v2}
+      # El model_id real lo reporta el propio NIM en /v1/models tras el primer arranque (mismo
+      # criterio que ingesta_corpus.py del SDK para el embed) — deploy/despliegue_spark.sh lo
+      # consulta y lo pasa aquí; el default es una suposición razonable, no verificada.
+      CHATRAG_NIM_CHAT_MODEL: ${CHATRAG_NIM_CHAT_MODEL:-nemotron}
+      CHATRAG_EGRESS_HOSTS: "nim-embed,nim-rerank,nim-chat"
+      CHATRAG_VOICE_ENABLED: "0" # sin Riva pineado todavía, ver docstring de este fichero
+      CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      CHATRAG_ADMIN_TOKEN: ${CHATRAG_ADMIN_TOKEN:?falta CHATRAG_ADMIN_TOKEN}
+      CHATRAG_KNOWLEDGE_DIR: /knowledge
+      CHATRAG_THEME_FILE: /data/theme.json
+      # Sin tribu-auth ni proveedor SSO real todavía (ver CLAUDE.md) — sin esto, /query
+      # responde 401 a cualquier visitante real. "nunca en producción" según su propio
+      # docstring: se deja SIN configurar por defecto a propósito, decide explícitamente por
+      # entorno en deploy/.env.chatrag-spark si este despliegue es para probar en dev.
+      CHATRAG_DEV_IDENTITY_BYPASS: ${CHATRAG_DEV_IDENTITY_BYPASS:-}
+    volumes:
+      - chatrag-knowledge:/knowledge
+      - chatrag-data:/data
+    ports:
+      - "${CHATRAG_API_BIND_HOST:-127.0.0.1}:8091:8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      start_period: 20s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    image: ${CHATRAG_FRONTEND_IMAGE:-chatrag-frontend:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      chatrag-api:
+        condition: service_healthy
+    environment:
+      CHATRAG_API_URL: http://chatrag-api:8080
+      CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      CHATRAG_AUTH_SECRET: ${CHATRAG_AUTH_SECRET:?falta CHATRAG_AUTH_SECRET}
+      CHATRAG_AUTH_URL: ${CHATRAG_AUTH_URL:?falta CHATRAG_AUTH_URL}
+      NEXT_PUBLIC_VOICE_ENABLED: "0"
+      NEXT_PUBLIC_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
+    ports:
+      # Mismo criterio que los NIM: solo loopback salvo que se fije explícitamente a la IP
+      # Tailscale del Spark para que el equipo de prueba llegue al chat real desde fuera.
+      - "${CHATRAG_FRONTEND_BIND_HOST:-127.0.0.1}:3000:3000"
+
+volumes:
+  nim-chat-cache:
+  nim-embed-cache:
+  nim-rerank-cache:
+  chatrag-knowledge:
+  chatrag-data:

@@ -1,0 +1,30 @@
+# Imagen de producción del frontend (Next.js 16, App Router) para el despliegue en DGX Spark
+# (Fase D, ver deploy/docker-compose.chatrag-spark.yml). Usa `output: "standalone"`
+# (next.config.ts) para copiar solo server.js + el node_modules mínimo que Next traza por uso
+# real, no todo node_modules/ — imagen final de decenas de MB en vez de cientos.
+#
+# El BFF (src/app/api/*) sigue corriendo server-side dentro de este mismo contenedor: el
+# navegador nunca ve CHATRAG_API_URL ni el bearer de servicio, exactamente igual que en dev
+# (ver CLAUDE.md) — contenedorizar no cambia esa arquitectura, solo dónde corre `next start`.
+
+FROM node:24-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . .
+# CHATRAG_API_URL/CHATRAG_AUTH_SECRET reales se inyectan en runtime (docker-compose.chatrag-
+# spark.yml, ver ese fichero) — el build de Next no necesita valores reales de esas env vars
+# para producir el bundle (son server-only, leídas en request-time por los route handlers).
+RUN npm run build
+
+FROM node:24-slim AS run
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+# Sin public/ en este repo todavía (sin assets estáticos propios) — si se añade, descomentar:
+# COPY --from=build /app/public ./public
+EXPOSE 3000
+CMD ["node", "server.js"]
