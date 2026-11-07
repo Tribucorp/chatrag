@@ -4,7 +4,7 @@ SDK en `~/repositorio/tribu-sdk/python/tribu-audit/`; el patrón de persistencia
 `tribu-sdk/python/tribu-spark-firma/src/tribu_spark_firma/persistent_audit_chain.py` (el único
 consumidor real del SDK que respalda `AuditChain` en Postgres) — ver `chatrag_api/audit.py`.
 
-Marcada `integration`. Además del registry privado (`tribu_audit`), necesita una Postgres real:
+Marcada `integration`. Además del SDK instalado (`tribu_audit`), necesita una Postgres real:
 `CHATRAG_TEST_AUDIT_DATABASE_URL` (DSN de una base vacía o descartable — el test hace
 `DROP TABLE IF EXISTS chatrag_audit_entries` al empezar). Sin esa env var, se skippea — no
 inventa un Postgres local. En CI, el job `backend-integration` la provee vía un servicio
@@ -18,7 +18,7 @@ import secrets
 
 import pytest
 
-pytest.importorskip("tribu_audit", reason="requiere el registry privado del SDK instalado")
+pytest.importorskip("tribu_audit", reason="requiere el SDK instalado (uv sync)")
 pytest.importorskip("asyncpg", reason="driver de Postgres")
 
 pytestmark = pytest.mark.integration

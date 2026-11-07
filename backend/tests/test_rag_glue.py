@@ -5,7 +5,7 @@ from chatrag_api.rag import answer_query, filter_by_acl
 
 
 class FakeRetriever:
-    """Retriever de prueba: devuelve una lista fija, sin tocar tribu-rag ni el registry.
+    """Retriever de prueba: devuelve una lista fija, sin tocar tribu-rag.
     `requester_roles` se acepta (mismo Protocol que el real) pero se ignora aquí a propósito —
     el filtrado real por rol se prueba vía `filter_by_acl`, no en este doble."""
 

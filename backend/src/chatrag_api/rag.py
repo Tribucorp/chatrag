@@ -1,7 +1,7 @@
 """Pipeline RAG de ChatRAG: recuperar → filtrar por ACL de la fuente → construir citas.
 
 Diseño deliberado: la recuperación se define por un **Protocol** (`Retriever`), no por un
-import directo de `tribu-rag`. Así (a) el producto se testea sin el registry del SDK inyectando
+import directo de `tribu-rag`. Así (a) el producto se testea sin NIM ni Milvus inyectando
 un retriever falso, y (b) la adaptación al SDK vive en un solo sitio (`tribu_rag_retriever`),
 con import perezoso. La lógica **propia del producto** —el filtrado de ACL heredado de la
 fuente y el ensamblado de citas verificables— es la que se prueba aquí, y es fail-closed:
@@ -12,7 +12,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from tribu_rag.milvus_store import MilvusVectorStore
+    from tribu_rag.nim_client import NimEmbeddingProvider
+    from tribu_rag.rerank_client import NimRerankClient
 
 from chatrag_api.audit import AuditLog, NullAuditLog
 from chatrag_api.models import Answer, Citation, Query, UserContext
@@ -150,7 +155,7 @@ async def answer_query(
     return Answer(text=text, citations=ordered, abstained=False)
 
 
-class _TribuRagRetriever:  # pragma: no cover - requiere el registry + NIM + Milvus reales
+class _TribuRagRetriever:  # pragma: no cover - requiere NIM + Milvus reales
     """Adaptador de producción compuesto sobre tribu-rag: NIM de embeddings (query) + búsqueda
     híbrida real de Milvus (BM25+ANN+RRF nativos, `MilvusVectorStore.query_hybrid`) + reranking
     real (`NimRerankClient`/`rerank_chunks`).
@@ -162,13 +167,13 @@ class _TribuRagRetriever:  # pragma: no cover - requiere el registry + NIM + Mil
     suyo, pero la composición real (embed → store → rerank) la escribe cada producto. La
     versión anterior de este adaptador importaba `tribu_rag.HybridRetriever`, que nunca existió
     — nunca se detectó porque el test de integración correspondiente nunca corrió con el
-    registry real instalado."""
+    SDK real instalado."""
 
     def __init__(
         self,
-        store: object,
-        embed_provider: object,
-        rerank_client: object,
+        store: MilvusVectorStore,
+        embed_provider: NimEmbeddingProvider,
+        rerank_client: NimRerankClient,
         *,
         tenant_id: str,
     ) -> None:
@@ -180,10 +185,10 @@ class _TribuRagRetriever:  # pragma: no cover - requiere el registry + NIM + Mil
     async def retrieve(
         self, question: str, *, top_k: int, requester_roles: frozenset[str]
     ) -> Sequence[Citation]:
-        from tribu_rag.rerank_client import rerank_chunks  # type: ignore[import-not-found]
+        from tribu_rag.rerank_client import rerank_chunks
 
-        [embedding] = await self._embed.embed([question])  # type: ignore[attr-defined]
-        chunks = await self._store.query_hybrid(  # type: ignore[attr-defined]
+        [embedding] = await self._embed.embed([question])
+        chunks = await self._store.query_hybrid(
             self._tenant_id,
             tuple(embedding),
             question,
@@ -221,10 +226,10 @@ async def tribu_rag_retriever(
     nim_rerank_url: str,
     nim_rerank_model_id: str,
     allowed_hosts: frozenset[str],
-) -> Retriever:  # pragma: no cover - requiere el registry + NIM + Milvus reales
+) -> Retriever:  # pragma: no cover - requiere NIM + Milvus reales
     """Construye el `_TribuRagRetriever` de producción. Import perezoso: el paquete del SDK
     solo se exige cuando de verdad se usa el retriever real, no al importar este módulo (así
-    los tests del producto corren sin el registry privado). Async (a diferencia de la versión
+    los tests del producto corren sin NIM ni Milvus). Async (a diferencia de la versión
     anterior de este adaptador) porque el guard de dimensión real lee Milvus.
 
     El guard de dimensión dinámico de `tribu-rag` (`verify_dimension_guard`) NO llama al NIM —
@@ -236,13 +241,13 @@ async def tribu_rag_retriever(
     `tribu-sdk/scripts/ingesta_corpus.py`), no contra un valor construido aquí mismo con los
     mismos parámetros. Si el tenant nunca se ingirió todavía, no hay nada que contrastar."""
 
-    from pymilvus import AsyncMilvusClient  # type: ignore[import-not-found]
-    from tribu_http.client import TribuHttpClient  # type: ignore[import-not-found]
-    from tribu_http.egress import EgressAllowlist  # type: ignore[import-not-found]
-    from tribu_rag.embeddings import verify_dimension_guard  # type: ignore[import-not-found]
-    from tribu_rag.milvus_store import MilvusVectorStore  # type: ignore[import-not-found]
-    from tribu_rag.nim_client import NimEmbeddingProvider  # type: ignore[import-not-found]
-    from tribu_rag.rerank_client import NimRerankClient  # mypy: módulo ya visto arriba
+    from pymilvus import AsyncMilvusClient  # type: ignore[import-untyped]  # sin py.typed
+    from tribu_http.client import TribuHttpClient
+    from tribu_http.egress import EgressAllowlist
+    from tribu_rag.embeddings import verify_dimension_guard
+    from tribu_rag.milvus_store import MilvusVectorStore
+    from tribu_rag.nim_client import NimEmbeddingProvider
+    from tribu_rag.rerank_client import NimRerankClient
 
     http = TribuHttpClient(EgressAllowlist(allowed_hosts=allowed_hosts))
     # input_type="query": el NIM de embeddings es asimétrico (verificado en ingesta_corpus.py
@@ -273,8 +278,8 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
     OpenAI-compatible `/v1/chat/completions`, el estándar de los NIM de LLM."""
 
     def __init__(self, nim_chat_url: str, *, model: str, allowed_hosts: frozenset[str]) -> None:
-        from tribu_http.client import TribuHttpClient  # mypy: módulo ya visto arriba
-        from tribu_http.egress import EgressAllowlist  # mypy: módulo ya visto arriba
+        from tribu_http.client import TribuHttpClient
+        from tribu_http.egress import EgressAllowlist
 
         self._url = f"{nim_chat_url.rstrip('/')}/v1/chat/completions"
         self._model = model
@@ -288,7 +293,7 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
         # sistema. Mitigación probabilística, no control (el propio módulo lo dice: el control
         # real sería Plan-Then-Execute, que no aplica aquí — este generador no ejecuta acciones,
         # solo redacta texto anclado en `citations`).
-        from tribu_guardrails.tool_poisoning import (  # type: ignore[import-not-found]
+        from tribu_guardrails.tool_poisoning import (  # type: ignore[import-untyped]  # sin py.typed
             render_untrusted_as_data,
         )
 
@@ -321,6 +326,6 @@ def tribu_nim_chat_generator(
 ) -> ChatGenerator:  # pragma: no cover - requiere el NIM de chat on-prem
     """Construye el `ChatGenerator` de producción. Import perezoso: `tribu-http` solo se exige
     cuando de verdad se usa el generador real, no al importar este módulo (los tests del
-    producto corren con un doble, sin el registry privado ni el NIM)."""
+    producto corren con un doble, sin el NIM)."""
 
     return _TribuNimChatGenerator(nim_chat_url, model=model, allowed_hosts=allowed_hosts)

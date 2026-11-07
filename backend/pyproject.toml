@@ -1,29 +1,23 @@
 [project]
 name = "chatrag-api"
 version = "0.1.0"
-description = "Backend RAG de ChatRAG — piloto de adopcion del Tribu SDK. Consume los modulos tribu-* como wheels del registry privado; nada de vendorizar ni copiar codigo del SDK."
+description = "Backend RAG de ChatRAG — piloto de adopcion del Tribu SDK. Consume los modulos tribu-* como dependencias git fijadas a un tag del SDK (ADR-0020); nada de vendorizar ni copiar codigo del SDK."
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pydantic>=2.7",
-    # --- Tribu SDK (wheels Nuitka del registry privado de Tribucorp, NO PyPI) ---
-    # Se instalan con el indice privado configurado (ver [tool.uv] abajo). Pin estricto,
-    # nunca 'latest' (regla del SDK). Solo se declaran los modulos que el SDK publica hoy
-    # (fase S0 del SDK, ver tribu_maestro_estado_sdk): tribu-observability, tribu-auth
-    # y tribu-demo-kit NO existen todavia en el registry, asi que fijarlos aqui rompe
-    # `uv sync` de verdad (CI lo esquiva con --no-deps, lo que ocultaba el problema).
-    # Volver a añadir cada uno cuando el SDK lo publique (confirmar con el equipo del SDK,
-    # no solo con este comentario).
-    "tribu-http>=0.1,<0.2",
-    "tribu-rag>=0.1,<0.2",
-    # tribu-audit, tribu-guardrails y tribu-voice SI existen hoy (fase S0) -- API confirmada
-    # leyendo el codigo fuente real del SDK en disco (~/repositorio/tribu-sdk/python/), no el
-    # corpus de x9 (se rehuso por falta de referencia documentada). Ver audit.py,
-    # rag.py::_TribuNimChatGenerator.generate, y voice.py.
-    "tribu-audit>=0.1,<0.2",
-    "tribu-guardrails>=0.1,<0.2",
-    "tribu-voice>=0.1,<0.2",
+    # --- Tribu SDK: dependencias git fijadas a un tag (ADR-0020 del SDK, docs/CONSUMIR_EL_SDK.md) ---
+    # No hay indice PyPI propio: `registry.tribucorp.internal` nunca existio. La version la fija
+    # la `tag` de [tool.uv.sources] (todas la misma), no el rango de aqui. tribu-crypto entra
+    # como dependencia transitiva de tribu-guardrails y se fija igual para que todo el SDK sea
+    # de la misma release. tribu-audit y tribu-crypto tienen nucleo Rust: instalar exige cargo.
+    "tribu-http",
+    "tribu-rag",
+    "tribu-audit",
+    "tribu-crypto",
+    "tribu-guardrails",
+    "tribu-voice",
     # --- PyPI normal, no del registry privado ---
     # Respalda tribu_audit.AuditChain en Postgres (ver audit.py) -- opt-in, solo se usa si
     # CHATRAG_AUDIT_DATABASE_URL/CHATRAG_AUDIT_CHAIN_KEY estan configuradas.
@@ -44,20 +38,16 @@ dev = [
     "httpx>=0.27",
 ]
 
-# El SDK NO esta en PyPI: se sirve como wheels del registry privado de Tribucorp. La URL real
-# se inyecta por entorno en CI/registry (UV_INDEX_TRIBU_URL); aqui solo se declara el nombre
-# del indice y que los tribu-* salen de el, para que ningun tribu-* se resuelva contra PyPI.
-[[tool.uv.index]]
-name = "tribu"
-url = "https://registry.tribucorp.internal/simple"
-explicit = true
-
+# El SDK es privado de la organizacion: en local basta `gh auth setup-git`; en CI, un PAT de solo
+# lectura sobre Tribucorp/tribu-sdk (secret TRIBU_SDK_PAT, ver .github/workflows/ci.yml).
+# Al subir de release del SDK se cambia la `tag` en TODAS las lineas a la vez.
 [tool.uv.sources]
-tribu-http = { index = "tribu" }
-tribu-rag = { index = "tribu" }
-tribu-audit = { index = "tribu" }
-tribu-guardrails = { index = "tribu" }
-tribu-voice = { index = "tribu" }
+tribu-http = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-http" }
+tribu-rag = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-rag" }
+tribu-audit = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-audit" }
+tribu-crypto = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-crypto" }
+tribu-guardrails = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-guardrails" }
+tribu-voice = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-voice" }
 
 [build-system]
 requires = ["hatchling"]
@@ -69,7 +59,7 @@ packages = ["src/chatrag_api"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 markers = [
-    "integration: requiere el registry privado del SDK instalado de verdad (ver .github/workflows/ci.yml, job backend-integration); no corre en el job unitario.",
+    "integration: requiere el SDK instalado de verdad (dependencias git, ADR-0020) (ver .github/workflows/ci.yml, job backend-integration); no corre en el job unitario.",
 ]
 addopts = "-m 'not integration'"
 

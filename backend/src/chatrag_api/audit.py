@@ -21,7 +21,10 @@ import json
 import time
 import uuid
 from collections.abc import Mapping
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    import tribu_audit
 
 
 class AuditLog(Protocol):
@@ -57,10 +60,10 @@ CREATE TABLE IF NOT EXISTS chatrag_audit_entries (
 """
 
 
-class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del registry + Postgres
+class TribuPostgresAuditLog:  # pragma: no cover - requiere Postgres real
     """Adaptador de producción: `tribu_audit.AuditChain` en memoria, respaldada en Postgres.
-    Import perezoso de `tribu_audit`/`asyncpg` (mismo motivo que `rag.py`: que los tests del
-    producto corran sin el registry privado ni una base real).
+    Import perezoso de `tribu_audit`/`asyncpg` (mismo motivo que `rag.py`: el SDK solo se carga
+    cuando de verdad se usa el adaptador real).
 
     Simplificación deliberada frente a `persistent_audit_chain.py`: persiste cada entrada
     de inmediato (`record()` hace un INSERT por llamada) en vez de acumular en el `AuditChain`
@@ -73,8 +76,8 @@ class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del regi
     def __init__(self, database_url: str, *, chain_key: bytes) -> None:
         self._database_url = database_url
         self._chain_key = chain_key
-        self._pool: object | None = None
-        self._chain: object | None = None
+        self._pool: Any = None  # asyncpg.Pool (asyncpg no publica tipos)
+        self._chain: tribu_audit.AuditChain | None = None
 
     async def connect(self) -> None:
         """Crea el pool, la tabla si no existe, y rehidrata + verifica la cadena completa.
@@ -89,7 +92,7 @@ class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del regi
         # el código del par que no aplique en cada entorno. Un ignore sin código evita la
         # discrepancia sin tener que elegir uno.
         import asyncpg  # type: ignore
-        import tribu_audit  # type: ignore[import-not-found]
+        import tribu_audit
 
         pool = await asyncpg.create_pool(self._database_url)
         self._pool = pool
@@ -117,7 +120,7 @@ class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del regi
         self._chain = chain
 
     async def record(self, *, actor_id: str, action: str, payload: Mapping[str, object]) -> None:
-        import tribu_audit  # mypy ya conoce el módulo desde el import de connect() (mismo file)
+        import tribu_audit
 
         assert self._chain is not None and self._pool is not None, "connect() no se llamó"
         entrada = tribu_audit.append_entry(
@@ -130,9 +133,9 @@ class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del regi
             json.dumps(payload, ensure_ascii=False, sort_keys=True),
             int(time.time()),
         )
-        self._chain.push(entrada)  # type: ignore[attr-defined]
+        self._chain.push(entrada)
         pool = self._pool
-        async with pool.acquire() as conn:  # type: ignore[attr-defined]
+        async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO chatrag_audit_entries "
                 "(entry_id, case_token, actor_id, action, payload_json, recorded_at_unix, "
@@ -150,7 +153,7 @@ class TribuPostgresAuditLog:  # pragma: no cover - requiere tribu-audit del regi
 
     async def aclose(self) -> None:
         if self._pool is not None:
-            await self._pool.close()  # type: ignore[attr-defined]
+            await self._pool.close()
 
 
 async def read_recent_entries(

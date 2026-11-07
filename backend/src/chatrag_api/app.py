@@ -1,18 +1,19 @@
 """App FastAPI de ChatRAG. Un servicio, un contenedor, config por entorno, healthcheck —
 k8s-ready aunque hoy corra en compose (regla del SDK).
 
-Wiring del SDK (en producción, con los wheels del registry):
+Wiring del SDK (dependencias git fijadas a un tag, ver pyproject.toml):
 - **tribu-http**: cliente único con egress deny-by-default hacia los NIM on-prem.
 - **tribu-rag**: el retriever real (inyectado como `Retriever`).
-- **tribu-auth**: NO existe todavía en el registry (fase S0 del SDK, ver
-  `tribu_maestro_estado_sdk`) — `current_user` es un stopgap deliberado: confía en
-  `X-User-Id`/`X-User-Acls` ya puestas por el BFF (`src/app/api/chat/route.ts` en el frontend,
-  con Auth.js) hasta que exista el módulo real.
+- **tribu-auth**: es un paquete **TypeScript** (`@tribu/auth`, better-auth), no Python — vive
+  en el BFF del frontend, no aquí. `current_user` confía en `X-User-Id`/`X-User-Acls` puestas
+  por el BFF (`src/app/api/chat/route.ts`), y solo si el caller presenta el bearer de servicio
+  (`service_bearer_token`) cuando está configurado.
 - **tribu-audit** (`audit.py`): traza de decisión — API confirmada leyendo el código fuente
   real del SDK en disco (no el corpus de x9, que se rehusó por falta de referencia). Opt-in:
   sin `CHATRAG_AUDIT_DATABASE_URL`/`CHATRAG_AUDIT_CHAIN_KEY`, `NullAuditLog` (sin traza, la
-  consulta sigue funcionando). tribu-observability, que sería el candidato "natural" del
-  nombre, no existe en el registry — de ahí que la traza de decisión pase por tribu-audit.
+  consulta sigue funcionando). tribu-observability existe (Parcial en v1.0.0: OTel GenAI +
+  MAST, sin Prometheus/Sentry cableados) pero no está integrado todavía; la traza de decisión
+  es de tribu-audit.
 - **tribu-guardrails**: `render_untrusted_as_data` (`tribu_guardrails.tool_poisoning`) envuelve
   cada cita en `rag.py: _TribuNimChatGenerator.generate` antes de mandarla al NIM — el contenido
   viene de `munistgo.cl`, no confiable. `check_lethal_trifecta` corre aquí en `lifespan` contra
@@ -23,8 +24,8 @@ Panel de administración (`admin.py`, montado como router): ingesta real a `trib
 (`GET /admin/audit`) — protegido por `CHATRAG_ADMIN_TOKEN`, sin comportamiento por defecto
 abierto (503 sin configurar).
 
-`create_app` acepta un `Retriever` inyectado para poder testear el servicio entero sin el
-registry del SDK; si no se inyecta, se construye perezosamente el de `tribu-rag` en `startup`.
+`create_app` acepta un `Retriever` inyectado para poder testear el servicio entero sin
+NIM ni Milvus; si no se inyecta, se construye perezosamente el de `tribu-rag` en `startup`.
 """
 
 from __future__ import annotations
@@ -110,7 +111,7 @@ def create_app(
     """Crea la app. `retriever`/`generator`/`audit_log`/`voice_service` inyectables para tests;
     si son `None`, se construyen los de producción (`tribu-rag`, NIM de chat vía `tribu-http`,
     traza sobre `tribu-audit` si está configurada, voz sobre `tribu-voice` si
-    `voice_enabled`) en el arranque (requieren el registry privado, el NIM on-prem y Postgres
+    `voice_enabled`) en el arranque (requieren el NIM on-prem, Milvus y Postgres
     respectivamente — `audit_log` cae a `NullAuditLog` si no hay Postgres configurado, no
     bloquea el arranque; `voice_service` se queda en `None` si `voice_enabled` es `False`, y
     los endpoints `/voice/*` responden 503 en ese caso)."""
@@ -119,7 +120,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if app.state.retriever is None:  # pragma: no cover - requiere el registry del SDK
+        if app.state.retriever is None:  # pragma: no cover - requiere NIM + Milvus reales
             from chatrag_api.rag import tribu_rag_retriever
 
             app.state.retriever = await tribu_rag_retriever(
@@ -144,7 +145,7 @@ def create_app(
             if (
                 app_settings.audit_database_url is not None
                 and app_settings.audit_chain_key is not None
-            ):  # pragma: no cover - requiere tribu-audit del registry + Postgres
+            ):  # pragma: no cover - requiere Postgres real
                 from chatrag_api.audit import TribuPostgresAuditLog
 
                 real_audit_log = TribuPostgresAuditLog(
@@ -156,7 +157,7 @@ def create_app(
                 app.state.audit_log = NullAuditLog()
         if (
             app.state.voice_service is None and app_settings.voice_enabled
-        ):  # pragma: no cover - requiere tribu-voice del registry + NIM Riva real
+        ):  # pragma: no cover - requiere el NIM Riva real
             theme_store = get_theme_store(
                 audit_database_url=app_settings.audit_database_url,
                 theme_file=Path(app_settings.theme_file),
@@ -167,7 +168,7 @@ def create_app(
                 allowed_hosts=app_settings.egress_allowed_hosts,
                 get_theme=theme_store.get,
             )
-        if retriever is None and generator is None:  # pragma: no cover - requiere el registry
+        if retriever is None and generator is None:  # pragma: no cover - requiere NIM reales
             # tribu-guardrails: solo en arranque de producción (sin dobles inyectados) — el
             # check en sí es una función pura sin dependencias, pero el paquete solo se exige
             # instalado cuando de verdad se usa, igual que tribu-rag/tribu-http arriba. ChatRAG
@@ -176,7 +177,7 @@ def create_app(
             # contenido no confiable de munistgo.cl) — declarar el manifiesto real deja la
             # tercera pata (comunicación externa) explícita y chequeada en cada arranque, no
             # solo razonada en un comentario.
-            from tribu_guardrails.lethal_trifecta import (  # type: ignore[import-not-found]
+            from tribu_guardrails.lethal_trifecta import (  # type: ignore[import-untyped]  # sin py.typed
                 AgentManifest,
                 check_lethal_trifecta,
             )

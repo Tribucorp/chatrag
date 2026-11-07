@@ -3,7 +3,7 @@
 `~/repositorio/tribu-sdk/python/tribu-guardrails/src/tribu_guardrails/` (el corpus de x9 se
 rehusó a responder por falta de referencia documentada).
 
-Marcada `integration`, gateada por el registry privado — ver docstring de
+Marcada `integration`, requiere el SDK instalado (uv sync) — ver docstring de
 `test_sdk_integration.py`.
 """
 
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("tribu_guardrails", reason="requiere el registry privado del SDK instalado")
+pytest.importorskip("tribu_guardrails", reason="requiere el SDK instalado (uv sync)")
 
 pytestmark = pytest.mark.integration
 

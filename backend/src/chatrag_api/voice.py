@@ -24,7 +24,11 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
+
+if TYPE_CHECKING:
+    from tribu_http.client import TribuHttpClient
+    from tribu_voice import AgentFace, EphemeralToken, TokenScope
 
 from pydantic import BaseModel, ConfigDict
 
@@ -120,13 +124,13 @@ class FakeVoiceService:
         return "(transcripción de prueba)"
 
 
-class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry + NIM Riva real
+class TribuVoiceService:  # pragma: no cover - requiere el NIM Riva real
     """Adaptador de producción. Import perezoso de `tribu_voice`/`tribu_http` completo (mismo
-    motivo que el resto del backend: los tests corren sin el registry ni el NIM).
+    motivo que el resto del backend: los tests corren sin el NIM).
 
     Registro de tokens **en memoria, sin firmar** — `tribu_voice` deja la firma real
-    (Ed25519/JWT) explícitamente para `tribu-auth` (ver su docstring), que no existe todavía en
-    el registry (mismo hueco que `current_user` en `app.py`). Mientras tanto, esto es la máquina
+    (Ed25519/JWT) explícitamente para `tribu-auth` (ver su docstring), que solo existe en
+    TypeScript (`@tribu/auth`) — no hay firma equivalente consumible desde este backend Python. Mientras tanto, esto es la máquina
     de estados de validez (`check_token`, real) sin la garantía criptográfica de que el
     `token_id` no se pueda adivinar/forjar — aceptable para un piloto de un solo proceso, no
     para producción multi-instancia (un token minteado en un worker no lo reconoce otro)."""
@@ -143,18 +147,18 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         self._nim_asr_url = nim_asr_url.rstrip("/")
         self._allowed_hosts = allowed_hosts
         self._get_theme = get_theme
-        self._tokens: dict[str, object] = {}  # token_id -> tribu_voice.EphemeralToken
-        self._http: object | None = None  # tribu_http.TribuHttpClient
+        self._tokens: dict[str, EphemeralToken] = {}
+        self._http: TribuHttpClient | None = None
 
-    def _ensure_http(self) -> object:
+    def _ensure_http(self) -> TribuHttpClient:
         if self._http is None:
-            from tribu_http.client import TribuHttpClient  # type: ignore[import-not-found]
-            from tribu_http.egress import EgressAllowlist  # type: ignore[import-not-found]
+            from tribu_http.client import TribuHttpClient
+            from tribu_http.egress import EgressAllowlist
 
             self._http = TribuHttpClient(EgressAllowlist(allowed_hosts=self._allowed_hosts))
         return self._http
 
-    async def _build_face_from_theme(self) -> object:
+    async def _build_face_from_theme(self) -> AgentFace:
         """Cara única de ChatRAG, construida en cada llamada (no cacheada) a partir del tema
         actual (`Theme.app_name` de marca, `Theme.voice_id` de voz — configurable desde
         `/admin/theme` sin redeploy). Reconstruir en cada sesión, en vez de cachear al primer
@@ -162,7 +166,7 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         reiniciar el proceso."""
 
         from pydantic import ValidationError
-        from tribu_voice import AgentFace, VoiceBrand  # type: ignore[import-not-found]
+        from tribu_voice import AgentFace, VoiceBrand
 
         theme = await self._get_theme()
         try:
@@ -175,7 +179,7 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         return AgentFace(face_id="default", avatar_id="orb", brand=brand)
 
     async def mint_session(self) -> VoiceSessionInfo:
-        from tribu_voice import TokenScope, mint_ephemeral_token  # mypy: módulo ya visto arriba
+        from tribu_voice import TokenScope, mint_ephemeral_token
 
         face = await self._build_face_from_theme()
         now = time.time()
@@ -189,12 +193,12 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         self._tokens[token.token_id] = token
         return VoiceSessionInfo(
             token_id=token.token_id,
-            face_id=face.face_id,  # type: ignore[attr-defined]
+            face_id=face.face_id,
             expires_at=token.expires_at,
         )
 
-    def _check(self, token_id: str, *, required_scope: object) -> object:
-        from tribu_voice import (  # mypy: módulo ya visto arriba
+    def _check(self, token_id: str, *, required_scope: TokenScope) -> EphemeralToken:
+        from tribu_voice import (
             InsufficientScopeError,
             TokenExpiredError,
             check_token,
@@ -210,8 +214,7 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         return token
 
     async def speak(self, *, token_id: str, text: str, emotion: Emotion) -> bytes:
-        from tribu_http.client import TribuHttpClient  # mypy: módulo ya visto arriba
-        from tribu_voice import (  # mypy: módulo ya visto arriba
+        from tribu_voice import (
             SpeechRequest,
             SsmlEmotion,
             TokenScope,
@@ -222,9 +225,9 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
         # cambió la voz entre `mint_session` y `speak`, usa la vigente — el token solo
         # garantiza que la sesión es válida (alcance/caducidad), no fija qué voz sonará.
         face = await self._build_face_from_theme()
-        request = SpeechRequest(text=text, brand=face.brand, emotion=SsmlEmotion(emotion))  # type: ignore[attr-defined]
+        request = SpeechRequest(text=text, brand=face.brand, emotion=SsmlEmotion(emotion))
 
-        http: TribuHttpClient = self._ensure_http()
+        http = self._ensure_http()
         # Contrato sin verificar (ver docstring del módulo): asume forma OpenAI-compatible
         # como el resto de NIMs de este proyecto, no confirmado contra un NIM Riva TTS real.
         response = await http.post(
@@ -236,17 +239,17 @@ class TribuVoiceService:  # pragma: no cover - requiere tribu-voice del registry
             },
         )
         response.raise_for_status()
-        return response.content  # type: ignore[no-any-return]
+        return response.content
 
     async def transcribe(self, *, token_id: str, audio: bytes, content_type: str) -> str:
-        from tribu_voice import TokenScope  # mypy: módulo ya visto arriba
+        from tribu_voice import TokenScope
 
         self._check(token_id, required_scope=TokenScope.SPEAK)
         http = self._ensure_http()
         # Contrato sin verificar (ver docstring del módulo): mismo shape que la API de
         # transcripción de OpenAI (multipart, campo "file"), convención habitual en NIMs de
         # ASR — no confirmado contra un NIM Riva ASR real.
-        response = await http.post(  # type: ignore[attr-defined]
+        response = await http.post(
             f"{self._nim_asr_url}/v1/audio/transcriptions",
             files={"file": ("audio", audio, content_type)},
         )

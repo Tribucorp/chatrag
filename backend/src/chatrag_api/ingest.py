@@ -14,9 +14,14 @@ tiene ese script, pero como origen de documentos, no como cambio a esta función
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    from tribu_http.client import TribuHttpClient
+    from tribu_rag.milvus_store import MilvusVectorStore
+    from tribu_rag.nim_client import NimEmbeddingProvider
 
 
 class IngestReport(BaseModel):
@@ -65,7 +70,7 @@ class FakeIngestor:
         return IngestReport(document_id=document_id, chunks=n)
 
 
-class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvus reales
+class TribuRagIngestor:  # pragma: no cover - requiere NIM + Milvus reales
     """Adaptador de producción: mismo pipeline que `tribu-sdk/scripts/ingesta_corpus.py`
     (`tribu_rag.ingest.ingest_document` + `MilvusVectorStore.upsert` + guard de dimensión ANTES
     de indexar + `HeadingContextualizer`/`NimContextualizer`), parametrizado para el tenant de
@@ -93,16 +98,19 @@ class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvu
         self._nim_chat_model = nim_chat_model
         self._allowed_hosts = allowed_hosts
 
-    def _build_clients(self) -> tuple[object, object, object, object]:
+    def _build_clients(
+        self,
+    ) -> tuple[TribuHttpClient, NimEmbeddingProvider, Any, MilvusVectorStore]:
+        # `Any` = pymilvus.AsyncMilvusClient (pymilvus no publica tipos).
         """Un solo lugar para construir http/embedding_provider/milvus_client/store — lo
         comparten `ingest_markdown_dir` e `ingest_text` (antes duplicado; refactorizado al
         añadir `ingest_text` para `POST /admin/sources`, subir un documento suelto)."""
 
-        from pymilvus import AsyncMilvusClient  # type: ignore[import-not-found]
-        from tribu_http.client import TribuHttpClient  # type: ignore[import-not-found]
-        from tribu_http.egress import EgressAllowlist  # type: ignore[import-not-found]
-        from tribu_rag.milvus_store import MilvusVectorStore  # type: ignore[import-not-found]
-        from tribu_rag.nim_client import NimEmbeddingProvider  # type: ignore[import-not-found]
+        from pymilvus import AsyncMilvusClient  # type: ignore[import-untyped]  # sin py.typed
+        from tribu_http.client import TribuHttpClient
+        from tribu_http.egress import EgressAllowlist
+        from tribu_rag.milvus_store import MilvusVectorStore
+        from tribu_rag.nim_client import NimEmbeddingProvider
 
         # timeout=300s: una generación real de embeddings/chat en un NIM tarda más que una API
         # normal (mismo criterio que ingesta_corpus.py del SDK real).
@@ -126,16 +134,16 @@ class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvu
         document_id: str,
         text: str,
         source_uri: str,
-        http: object,
-        embedding_provider: object,
-        store: object,
+        http: TribuHttpClient,
+        embedding_provider: NimEmbeddingProvider,
+        store: MilvusVectorStore,
     ) -> IngestReport:
-        from tribu_rag.contextual import Contextualizer  # type: ignore[import-not-found]
-        from tribu_rag.ingest import (  # type: ignore[import-not-found]
+        from tribu_rag.contextual import Contextualizer
+        from tribu_rag.ingest import (
             HeadingContextualizer,
             ingest_document,
         )
-        from tribu_rag.nim_contextualizer import NimContextualizer  # type: ignore[import-not-found]
+        from tribu_rag.nim_contextualizer import NimContextualizer
 
         contextualizer: Contextualizer
         if self._nim_chat_url:
@@ -163,17 +171,17 @@ class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvu
             embedding_provider=embedding_provider,
         )
         if chunks:
-            await store.upsert(self._tenant_id, chunks)  # type: ignore[attr-defined]
+            await store.upsert(self._tenant_id, chunks)
         return IngestReport(document_id=document_id, chunks=len(chunks))
 
-    async def _write_index_metadata(self, store: object) -> None:
-        from tribu_rag.embeddings import IndexMetadata  # type: ignore[import-not-found]
+    async def _write_index_metadata(self, store: MilvusVectorStore) -> None:
+        from tribu_rag.embeddings import IndexMetadata
 
         # Registra CON QUÉ se ingirió de verdad (B-25 del SDK) — lo que
         # `rag.py: tribu_rag_retriever` contrasta en su propio arranque contra el NIM de
         # embeddings en vivo, para no depender de que ambos lados compartan config por
         # casualidad.
-        await store.write_index_metadata(  # type: ignore[attr-defined]
+        await store.write_index_metadata(
             self._tenant_id,
             IndexMetadata(
                 model_id=self._nim_embed_model_id,
@@ -200,8 +208,8 @@ class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvu
                 )
             await self._write_index_metadata(store)
         finally:
-            await milvus_client.close()  # type: ignore[attr-defined]
-            await http.aclose()  # type: ignore[attr-defined]
+            await milvus_client.close()
+            await http.aclose()
         return reports
 
     async def ingest_text(self, document_id: str, text: str) -> IngestReport:
@@ -217,8 +225,8 @@ class TribuRagIngestor:  # pragma: no cover - requiere el registry + NIM + Milvu
             )
             await self._write_index_metadata(store)
         finally:
-            await milvus_client.close()  # type: ignore[attr-defined]
-            await http.aclose()  # type: ignore[attr-defined]
+            await milvus_client.close()
+            await http.aclose()
         return report
 
 

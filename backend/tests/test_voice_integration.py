@@ -3,7 +3,7 @@
 fuente real del SDK en `~/repositorio/tribu-sdk/python/tribu-voice/`; el corpus de x9 no tenía
 referencia documentada.
 
-Marcada `integration`, gateada por el registry privado — ver docstring de
+Marcada `integration`, requiere el SDK instalado (uv sync) — ver docstring de
 `test_sdk_integration.py`. No llama a ningún NIM Riva real (no hay uno pineado en el SDK
 todavía, ver `voice.py`): valida instalación + la máquina de estados de tokens/caras, que es lo
 único que no depende de la red.
@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-pytest.importorskip("tribu_voice", reason="requiere el registry privado del SDK instalado")
+pytest.importorskip("tribu_voice", reason="requiere el SDK instalado (uv sync)")
 
 pytestmark = pytest.mark.integration
 
