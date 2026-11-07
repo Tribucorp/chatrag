@@ -54,6 +54,10 @@ jobs:
       CHATRAG_TEST_AUDIT_DATABASE_URL: postgresql://chatrag:chatrag@localhost:5432/chatrag_audit_test
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Sin esto, checkout deja un `http.extraheader` con el GITHUB_TOKEN de este repo que
+          # tiene prioridad sobre el PAT de abajo y no puede leer tribu-sdk (403 en uv sync).
+          persist-credentials: false
       - name: Acceso de solo lectura a Tribucorp/tribu-sdk
         env:
           TRIBU_SDK_PAT: ${{ secrets.TRIBU_SDK_PAT }}
