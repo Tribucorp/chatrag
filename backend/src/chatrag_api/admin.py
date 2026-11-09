@@ -13,6 +13,7 @@ token.
 from __future__ import annotations
 
 import hmac
+import os
 import re
 from pathlib import Path
 
@@ -93,11 +94,13 @@ def _safe_source_path(knowledge_dir: str, document_id: str) -> Path:
                 "números ASCII, '.', '_' o '-', sin ruta ni punto inicial (máx. 123 caracteres)"
             ),
         )
-    base = Path(knowledge_dir).resolve()
-    target = (base / document_id).resolve()
-    if not target.is_relative_to(base):
+    # realpath + prefijo con separador: el patrón de contención que reconoce CodeQL
+    # (py/path-injection) y que además resuelve symlinks dentro de knowledge_dir.
+    base = os.path.realpath(knowledge_dir)
+    target = os.path.realpath(os.path.join(base, document_id))
+    if not target.startswith(base + os.sep):
         raise HTTPException(status_code=400, detail="document_id fuera de knowledge_dir")
-    return target
+    return Path(target)
 
 
 class UploadSourceRequest(BaseModel):
