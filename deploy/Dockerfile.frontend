@@ -16,6 +16,9 @@ COPY package.json package-lock.json .npmrc ./
 RUN --mount=type=secret,id=node_auth_token,required=true \
     NODE_AUTH_TOKEN="$(cat /run/secrets/node_auth_token)" npm ci
 COPY . .
+# Voz en el navegador: NEXT_PUBLIC_* se incrusta al compilar (lo pasa el compose como build arg).
+ARG NEXT_PUBLIC_VOICE_ENABLED=0
+ENV NEXT_PUBLIC_VOICE_ENABLED=${NEXT_PUBLIC_VOICE_ENABLED}
 # CHATRAG_API_URL/CHATRAG_AUTH_SECRET reales se inyectan en runtime (docker-compose.chatrag-
 # spark.yml). `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: se le da un
 # valor de relleno SOLO a este RUN (no queda en la imagen final, que es otra etapa).
