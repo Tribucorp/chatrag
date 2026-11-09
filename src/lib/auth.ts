@@ -7,7 +7,7 @@ import { createTribuAuth } from "@tribu/auth";
 
 // Vocabulario de ACL y roles propios de ChatRAG — `tribu-auth` es agnóstico de producto. Viven
 // en `acl.ts`, la misma tabla que usa el BFF para armar `X-User-Acls`: una sola fuente.
-import { ACL_STATEMENTS, ROLE_GRANTS } from "./acl";
+import { ACL_STATEMENTS, ADMIN_ROLE, ROLE_GRANTS } from "./acl";
 
 function buildAuth() {
   const secret = process.env.CHATRAG_AUTH_SECRET;
@@ -26,7 +26,7 @@ function buildAuth() {
     roles: ROLE_GRANTS,
     // Sin esto better-auth usa "owner", un rol que no existe en ROLE_GRANTS: quien crea la
     // organización (el seed demo) se quedaría sin ninguna ACL.
-    creatorRole: "municipalAdmin",
+    creatorRole: ADMIN_ROLE,
     // TODO(persistencia): sin `database`, `createTribuAuth` usa su memoryAdapter — usuarios y
     // sesiones se pierden al reiniciar. Vale para el piloto; producción necesita una BD real.
     plugins: [nextCookies()],

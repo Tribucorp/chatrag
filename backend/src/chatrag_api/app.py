@@ -16,7 +16,7 @@ Wiring del SDK (dependencias git fijadas a un tag, ver pyproject.toml):
   es de tribu-audit.
 - **tribu-guardrails**: `render_untrusted_as_data` (`tribu_guardrails.tool_poisoning`) envuelve
   cada cita en `rag.py: _TribuNimChatGenerator.generate` antes de mandarla al NIM — el contenido
-  viene de `munistgo.cl`, no confiable. `check_lethal_trifecta` corre aquí en `lifespan` contra
+  viene del corpus (documentación de terceros), no confiable. `check_lethal_trifecta` corre aquí en `lifespan` contra
   el manifiesto real de ChatRAG (abajo).
 
 Panel de administración (`admin.py`, montado como router): ingesta real a `tribu-rag`/Milvus
@@ -50,6 +50,7 @@ from chatrag_api.rag import ChatGenerator, Retriever, answer_query
 from chatrag_api.theme import Theme, get_theme_store
 from chatrag_api.voice import (
     SpeakRequest,
+    VoiceBackendError,
     VoiceConfigError,
     VoiceDisabledError,
     VoiceService,
@@ -174,7 +175,7 @@ def create_app(
             # instalado cuando de verdad se usa, igual que tribu-rag/tribu-http arriba. ChatRAG
             # no es un agente con acciones/planificación (solo redacta texto anclado en citas),
             # pero sí concurren dos de las tres patas de la lethal trifecta (datos con ACL +
-            # contenido no confiable de munistgo.cl) — declarar el manifiesto real deja la
+            # contenido no confiable del corpus) — declarar el manifiesto real deja la
             # tercera pata (comunicación externa) explícita y chequeada en cada arranque, no
             # solo razonada en un comentario.
             from tribu_guardrails.lethal_trifecta import (  # type: ignore[import-untyped]  # sin py.typed
@@ -329,6 +330,9 @@ def create_app(
             raise HTTPException(status_code=401, detail=str(exc)) from exc
         except VoiceConfigError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except VoiceBackendError as exc:
+            logger.error("TTS: %s", exc)
+            raise HTTPException(status_code=502, detail="el servicio de voz no respondió") from exc
         return Response(content=audio, media_type="audio/wav")
 
     @app.post("/voice/transcribe", dependencies=[Depends(verify_service_bearer)])
@@ -344,6 +348,9 @@ def create_app(
             )
         except VoiceTokenError as exc:
             raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except VoiceBackendError as exc:
+            logger.error("ASR: %s", exc)
+            raise HTTPException(status_code=502, detail="el reconocimiento de voz no respondió") from exc
         return {"text": text}
 
     return app

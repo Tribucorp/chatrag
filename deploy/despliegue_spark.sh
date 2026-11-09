@@ -37,6 +37,7 @@ if corre 0; then
   ok "SSH a $SPARK_SSH funciona"
   [ -f "$ENVFILE" ] || fallo "falta $ENVFILE — copia deploy/.env.chatrag-spark.example y rellena"
   grep -q "changeme" "$ENVFILE" && fallo ".env.chatrag-spark aún tiene valores 'changeme'"
+  grep -qE '^NGC_API_KEY=.+' "$ENVFILE" || fallo "falta NGC_API_KEY en $ENVFILE (los NIM la necesitan para bajar sus modelos)"
   ok ".env.chatrag-spark presente y sin placeholders"
   [ -n "$LOCAL_SDK" ] || fallo "no encuentro ~/repositorio/tribu-sdk junto a este repo — hace falta como fuente de los wheels tribu-* (fase 2)"
   ok "tribu-sdk local encontrado en $LOCAL_SDK"
@@ -90,6 +91,8 @@ fi
 # ── FASE 3 · Repos en el Spark (rsync — sin credenciales git en el Spark) ───
 if corre 3; then
   azul "FASE 3 · Repos en el Spark"
+  # rsync no crea directorios intermedios: en un Spark recién usado no existe ~/repositorio.
+  sh_spark "mkdir -p repositorio/chatrag repositorio/tribu-sdk/python/tribu-rag/deploy"
   rsync -az --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
     --exclude 'target' --exclude 'rust' --exclude 'scripts' --exclude '.mypy_cache' \
     --exclude '__pycache__' -e "ssh -i $SPARK_KEY" \
@@ -105,7 +108,9 @@ if corre 4; then
   azul "FASE 4 · NGC login + pull de NIMs (paciencia)"
   set -a; source "$ENVFILE"; set +a
   sh_spark "echo '$NGC_API_KEY' | docker login nvcr.io -u '\$oauthtoken' --password-stdin" || fallo "login nvcr.io"
-  for IMG in "$NIM_CHAT_IMAGE" "$NIM_EMBED_IMAGE" "$NIM_RERANK_IMAGE"; do
+  NIM_TTS_IMAGE="${NIM_TTS_IMAGE:-nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0}"
+  NIM_ASR_IMAGE="${NIM_ASR_IMAGE:-nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual@sha256:670db8fb668142017a12ef6fef1834e37119c3cd03180b87e5c26deb830d87d3}"
+  for IMG in "$NIM_CHAT_IMAGE" "$NIM_EMBED_IMAGE" "$NIM_RERANK_IMAGE" "$NIM_TTS_IMAGE" "$NIM_ASR_IMAGE"; do
     echo "  → pull $IMG"
     sh_spark "docker pull '$IMG'" || fallo "pull de $IMG"
   done
@@ -123,16 +128,22 @@ if corre 5; then
   printf '%s' "$NPM_TOKEN" | sh_spark "cd $REPO_DIR && NODE_AUTH_TOKEN=\$(cat) docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml build"
   sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml up -d"
   echo "  → esperando salud de los servicios (el primer arranque de un NIM descarga el modelo: puede tardar)"
-  for i in $(seq 1 90); do
+  # Hasta 60 min: el primer arranque de los NIM de Riva descarga y optimiza el modelo.
+  for i in $(seq 1 180); do
     ESTADO=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml ps --format '{{.Name}} {{.Health}}'" 2>/dev/null || true)
     echo "$ESTADO" | sed 's/^/    /'
-    echo "$ESTADO" | grep -vq -E 'healthy|^$' || { ok "todos los servicios healthy"; break; }
+    # Comparación exacta: `grep healthy` también casaría "unhealthy".
+    PENDIENTES=$(echo "$ESTADO" | awk 'NF==2 && $2!="healthy"' | wc -l | tr -d ' ')
+    echo "$ESTADO" | awk '$2=="unhealthy"{exit 1}' || fallo "hay servicios unhealthy — mira docker compose logs"
+    [ -n "$ESTADO" ] && [ "$PENDIENTES" = 0 ] && { ok "todos los servicios healthy"; break; }
+    [ "$i" = 180 ] && fallo "tras 60 min siguen servicios sin estar healthy"
     sleep 20
   done
 
   azul "Guardia · los servicios solo escuchan en 127.0.0.1 salvo que se haya fijado explícitamente"
-  for SVC in nim-chat nim-embed nim-rerank chatrag-api frontend; do
-    BINDING=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml port $SVC $([ "$SVC" = chatrag-api ] && echo 8080 || ([ "$SVC" = frontend ] && echo 3000 || echo 8000))" 2>/dev/null)
+  for SVC in nim-chat nim-embed nim-rerank nim-tts nim-asr chatrag-api frontend; do
+    case "$SVC" in chatrag-api) P=8080 ;; frontend) P=3000 ;; nim-tts|nim-asr) P=9000 ;; *) P=8000 ;; esac
+    BINDING=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml port $SVC $P" 2>/dev/null)
     echo "  $SVC → ${BINDING:-(sin publicar)}"
   done
 fi
@@ -162,8 +173,7 @@ if corre 7; then
      y abre http://localhost:3000 en tu Mac sin exponer nada en la tailnet).
   3. /admin (CHATRAG_ADMIN_TOKEN de deploy/.env.chatrag-spark) para reindexar, ver el tema,
      conversaciones y métricas de consumo del RAG.
-  4. Sin CHATRAG_DEV_IDENTITY_BYPASS ni tribu-auth real, /query devuelve 401 a cualquier
-     visitante real — decide con Javier si este despliegue necesita el bypass de dev o espera
-     a un proveedor SSO real (ver CLAUDE.md).
+  4. Login con tribu-auth; con CHATRAG_AUTH_DEMO_SEED=1 hay cuentas demo (ver src/lib/seed-demo.ts).
+  5. La voz (micrófono) solo funciona en https o en localhost: usa el túnel SSH del punto 2.
 FIN
 fi

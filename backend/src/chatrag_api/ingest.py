@@ -13,15 +13,67 @@ tiene ese script, pero como origen de documentos, no como cambio a esta función
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from chatrag_api.rag import PUBLIC_ACL
+
 if TYPE_CHECKING:
     from tribu_http.client import TribuHttpClient
     from tribu_rag.milvus_store import MilvusVectorStore
     from tribu_rag.nim_client import NimEmbeddingProvider
+
+
+_FRONT_MATTER = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
+
+
+def split_front_matter(text: str) -> tuple[str | None, str]:
+    """Compatibilidad: (`source`, cuerpo). Ver `parse_front_matter`."""
+
+    meta, body = parse_front_matter(text)
+    return meta.source, body
+
+
+class FrontMatter(BaseModel):
+    """Cabecera de un documento del corpus: `source:` (URL http(s) citable) y `acl:` (etiquetas
+    separadas por comas que puede ver; sin `acl:` el documento es público)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str | None = None
+    acl: frozenset[str] = frozenset()
+
+
+_ACL_TAG = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
+
+
+def parse_front_matter(text: str) -> tuple[FrontMatter, str]:
+    """(cabecera, cuerpo sin cabecera). La cabecera la escribe quien prepara el corpus:
+    `source:` es la URL real de la que sale el contenido, que pasa a ser el `source_uri` de la
+    cita (verificable, a diferencia de un `file://` del servidor) — solo http(s), o `kb://`
+    para la base de conocimiento propia (sin URL pública); `acl:` restringe
+    el documento a esas etiquetas. Etiquetas mal formadas se ignoran; si `acl:` no deja ninguna
+    válida el documento NO pasa a público: se queda con una etiqueta que nadie tiene (fail-closed).
+    """
+
+    m = _FRONT_MATTER.match(text)
+    if not m:
+        return FrontMatter(), text
+    source: str | None = None
+    acl: frozenset[str] = frozenset()
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(":")
+        key, value = key.strip(), value.strip()
+        if key == "source" and re.match(r"(https?|kb)://\S+$", value):
+            source = value
+        elif key == "acl":
+            tags = {t.strip().lower() for t in value.split(",") if t.strip()}
+            valid = frozenset(t for t in tags if _ACL_TAG.fullmatch(t))
+            acl = valid if valid and valid == tags else frozenset({"acl-invalida"})
+    return FrontMatter(source=source, acl=acl), text[m.end():].lstrip("\n")
 
 
 class IngestReport(BaseModel):
@@ -134,6 +186,7 @@ class TribuRagIngestor:  # pragma: no cover - requiere NIM + Milvus reales
         document_id: str,
         text: str,
         source_uri: str,
+        allowed_roles: frozenset[str],
         http: TribuHttpClient,
         embedding_provider: NimEmbeddingProvider,
         store: MilvusVectorStore,
@@ -162,10 +215,8 @@ class TribuRagIngestor:  # pragma: no cover - requiere NIM + Milvus reales
             tenant_id=self._tenant_id,
             classification="publico",
             owner="chatrag",
-            # Todo el corpus inicial (knowledge/*.md) es público por diseño — ver
-            # rag.py: Citation.required_acl vacío = público. Un futuro origen con
-            # contenido restringido pasaría allowed_roles reales aquí, no "publico".
-            allowed_roles=frozenset({"publico"}),
+            # Sin `acl:` en la cabecera, público (`rag.PUBLIC_ACL`, que todo usuario tiene).
+            allowed_roles=allowed_roles or frozenset({PUBLIC_ACL}),
             source_uri=source_uri,
             contextualizer=contextualizer,
             embedding_provider=embedding_provider,
@@ -196,11 +247,13 @@ class TribuRagIngestor:  # pragma: no cover - requiere NIM + Milvus reales
         reports: list[IngestReport] = []
         try:
             for f in files:
+                meta, body = parse_front_matter(f.read_text(encoding="utf-8"))
                 reports.append(
                     await self._ingest_one(
                         document_id=f.name,
-                        text=f.read_text(encoding="utf-8"),
-                        source_uri=f"file://{f}",
+                        text=body,
+                        source_uri=meta.source or f"file://{f}",
+                        allowed_roles=meta.acl,
                         http=http,
                         embedding_provider=embedding_provider,
                         store=store,
@@ -215,10 +268,12 @@ class TribuRagIngestor:  # pragma: no cover - requiere NIM + Milvus reales
     async def ingest_text(self, document_id: str, text: str) -> IngestReport:
         http, embedding_provider, milvus_client, store = self._build_clients()
         try:
+            meta, body = parse_front_matter(text)
             report = await self._ingest_one(
                 document_id=document_id,
-                text=text,
-                source_uri=f"admin-upload://{document_id}",
+                text=body,
+                source_uri=meta.source or f"admin-upload://{document_id}",
+                allowed_roles=meta.acl,
                 http=http,
                 embedding_provider=embedding_provider,
                 store=store,

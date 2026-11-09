@@ -98,3 +98,43 @@ async def test_se_abstiene_cuando_no_queda_base_accesible():
     assert answer.citations == ()
     assert "no" in answer.text.lower()
     assert gen.calls == []  # nunca se invoca el generador sin base accesible
+
+
+# --- ACL pública implícita -------------------------------------------------------------------
+# La ingesta marca lo público con PUBLIC_ACL y tribu-rag filtra en Milvus con
+# JSON_CONTAINS_ANY(allowed_roles, requester_roles): sin añadirla a los roles de todo usuario, lo
+# público no le aparecía a nadie (bug que los dobles anteriores no veían).
+
+
+class RecordingRetriever(FakeRetriever):
+    def __init__(self, citations: Sequence[Citation]) -> None:
+        super().__init__(citations)
+        self.requester_roles: list[frozenset[str]] = []
+
+    async def retrieve(
+        self, question: str, *, top_k: int, requester_roles: frozenset[str]
+    ) -> Sequence[Citation]:
+        self.requester_roles.append(requester_roles)
+        return await super().retrieve(question, top_k=top_k, requester_roles=requester_roles)
+
+
+async def test_todo_usuario_consulta_con_la_acl_publica_ademas_de_las_suyas():
+    from chatrag_api.rag import PUBLIC_ACL
+
+    retriever = RecordingRetriever([])
+    sin_acls = UserContext(user_id="cliente", acls=frozenset())
+    con_acls = UserContext(user_id="tecnico", acls=frozenset({"soporte"}))
+    await answer_query(retriever, FakeGenerator(), Query(question="q"), sin_acls)
+    await answer_query(retriever, FakeGenerator(), Query(question="q"), con_acls)
+    assert retriever.requester_roles == [
+        frozenset({PUBLIC_ACL}),
+        frozenset({PUBLIC_ACL, "soporte"}),
+    ]
+
+
+def test_cita_etiquetada_publico_la_ve_un_usuario_sin_acls():
+    from chatrag_api.rag import PUBLIC_ACL
+
+    cliente = UserContext(user_id="cliente", acls=frozenset())
+    visibles = filter_by_acl([_c("doc://publico", acl=PUBLIC_ACL), _c("doc://int", acl="soporte")], cliente)
+    assert [c.source_uri for c in visibles] == ["doc://publico"]
