@@ -1,7 +1,9 @@
 import "server-only";
 
 import { auth } from "./auth";
+import { ensureAuthReady } from "./auth-ready";
 import { isAdminRole, rolesToAcls } from "./acl";
+import { serviceBearerToken } from "./secrets";
 import { DEMO_ORG_SLUG } from "./seed-demo";
 
 export type SessionIdentity = {
@@ -20,6 +22,7 @@ export type SessionIdentity = {
  * ACLs extra y solo verá citas públicas, igual que el backend trata cualquier ACL desconocida.
  */
 export async function getSessionIdentity(headers: Headers): Promise<SessionIdentity | null> {
+  await ensureAuthReady();
   const session = await auth.api.getSession({ headers });
   if (!session) return null;
 
@@ -42,7 +45,7 @@ export async function getSessionIdentity(headers: Headers): Promise<SessionIdent
 /** Cabeceras hacia chatrag-api: bearer de servicio (si está configurado) + identidad. */
 export function backendHeaders(identity: SessionIdentity | null): Record<string, string> {
   const headers: Record<string, string> = {};
-  const serviceBearer = process.env.CHATRAG_SERVICE_BEARER_TOKEN;
+  const serviceBearer = serviceBearerToken();
   if (serviceBearer) headers.Authorization = `Bearer ${serviceBearer}`;
   if (identity) {
     headers["X-User-Id"] = identity.userId;

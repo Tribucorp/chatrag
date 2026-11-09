@@ -341,6 +341,22 @@ async def tribu_rag_retriever(
     )
 
 
+async def tribu_rag_index_exists(
+    *, tenant_id: str, milvus_uri: str, embed_dim: int
+) -> bool:  # pragma: no cover - requiere Milvus real
+    """¿Hay ya un índice ingerido para el tenant? (metadatos que escribe la ingesta)."""
+
+    from pymilvus import AsyncMilvusClient
+    from tribu_rag.milvus_store import MilvusVectorStore
+
+    client = AsyncMilvusClient(uri=milvus_uri)
+    try:
+        store = MilvusVectorStore(client, embedding_dim=embed_dim)
+        return await store.read_index_metadata(tenant_id) is not None
+    finally:
+        await client.close()
+
+
 # `/no_think` desactiva el razonamiento de los Nemotron (nano-9b-v2, 3.5-lightning): sin él,
 # el modelo escribe ~1000 tokens de "pensamiento" antes de responder (25-36 s en la GB10) y la
 # consulta excede cualquier timeout razonable. Los modelos que no lo reconocen lo ignoran.

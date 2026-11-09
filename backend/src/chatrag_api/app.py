@@ -41,10 +41,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from chatrag_api import admin
+from chatrag_api.arranque import seed_knowledge, warmup
 from chatrag_api.audit import AuditLog, NullAuditLog
 from chatrag_api.config import Settings
 from chatrag_api.conversations import ConversationLog
-from chatrag_api.ingest import DocumentTitles
+from chatrag_api.ingest import DocumentTitles, IngestReport
 from chatrag_api.licencia import LicenseGate, LicenseGateMiddleware, resolve_config
 from chatrag_api.middleware import RateLimiter, RateLimitMiddleware, RequestLoggingMiddleware
 from chatrag_api.models import Answer, Query, UserContext
@@ -128,19 +129,50 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        knowledge_copied = seed_knowledge(
+            Path(app_settings.knowledge_dir),
+            Path(app_settings.seed_knowledge_dir) if app_settings.seed_knowledge_dir else None,
+        )
+        if knowledge_copied:
+            logger.info("corpus de arranque copiado: %d documentos", knowledge_copied)
+        warmup_task: asyncio.Task[None] | None = None
         if app.state.retriever is None:  # pragma: no cover - requiere NIM + Milvus reales
-            from chatrag_api.rag import tribu_rag_retriever
+            # En segundo plano y con reintentos (ver arranque.py): /health responde ya y /query
+            # devuelve 503 hasta que Milvus y los NIM estén listos.
+            from chatrag_api.rag import tribu_rag_index_exists, tribu_rag_retriever
 
-            app.state.retriever = await tribu_rag_retriever(
-                embed_dim=app_settings.embed_dim,
-                tenant_id=app_settings.tenant_id,
-                milvus_uri=app_settings.milvus_uri,
-                nim_embed_url=app_settings.nim_embed_url,
-                nim_embed_model_id=app_settings.nim_embed_model_id,
-                nim_rerank_url=app_settings.nim_rerank_url,
-                nim_rerank_model_id=app_settings.nim_rerank_model_id,
-                allowed_hosts=app_settings.egress_allowed_hosts,
-                titles=DocumentTitles(Path(app_settings.knowledge_dir)),
+            async def build_retriever() -> Retriever:
+                return await tribu_rag_retriever(
+                    embed_dim=app_settings.embed_dim,
+                    tenant_id=app_settings.tenant_id,
+                    milvus_uri=app_settings.milvus_uri,
+                    nim_embed_url=app_settings.nim_embed_url,
+                    nim_embed_model_id=app_settings.nim_embed_model_id,
+                    nim_rerank_url=app_settings.nim_rerank_url,
+                    nim_rerank_model_id=app_settings.nim_rerank_model_id,
+                    allowed_hosts=app_settings.egress_allowed_hosts,
+                    titles=DocumentTitles(Path(app_settings.knowledge_dir)),
+                )
+
+            async def index_exists() -> bool:
+                return await tribu_rag_index_exists(
+                    tenant_id=app_settings.tenant_id,
+                    milvus_uri=app_settings.milvus_uri,
+                    embed_dim=app_settings.embed_dim,
+                )
+
+            async def ingest() -> list[IngestReport]:
+                return await admin.ingestor_from_settings(app_settings).ingest_markdown_dir(
+                    Path(app_settings.knowledge_dir)
+                )
+
+            warmup_task = asyncio.create_task(
+                warmup(
+                    app.state,
+                    build_retriever=build_retriever,
+                    index_exists=index_exists,
+                    ingest=ingest if app_settings.auto_ingest else None,
+                )
             )
         if app.state.generator is None:  # pragma: no cover - requiere el NIM de chat on-prem
             from chatrag_api.rag import tribu_nim_chat_generator
@@ -203,6 +235,8 @@ def create_app(
         try:
             yield
         finally:
+            if warmup_task is not None and not warmup_task.done():  # pragma: no cover
+                warmup_task.cancel()
             aclose = getattr(app.state.generator, "aclose", None)
             if aclose is not None:  # pragma: no cover - requiere el generador real
                 await aclose()
@@ -275,7 +309,10 @@ def create_app(
         retriever = request.app.state.retriever
         generator = request.app.state.generator
         if retriever is None:
-            raise HTTPException(status_code=503, detail="retriever no inicializado")
+            raise HTTPException(
+                status_code=503,
+                detail="el asistente está arrancando (base de conocimiento aún no lista)",
+            )
         if generator is None:
             raise HTTPException(status_code=503, detail="generador no inicializado")
         try:
