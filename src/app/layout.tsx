@@ -5,9 +5,9 @@ import { ThemeProvider } from "@/lib/theme-context";
 import { themeCssVars } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "Asistente de la comuna de Santiago",
+  title: "Asistente de soporte PowerEdge",
   description:
-    "Asistente de la Municipalidad de Santiago de Chile — trámites, servicios municipales, direcciones y alcalde. RAG on-prem con citas verificables (Tribu SDK).",
+    "Asistente de soporte de servidores Dell PowerEdge de Ventisca TI (empresa ficticia de demo) — respuestas con fuente, RAG on-prem sobre el Tribu SDK.",
 };
 
 export default async function RootLayout({

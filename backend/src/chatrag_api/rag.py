@@ -58,6 +58,18 @@ class ChatGenerator(Protocol):
         ...
 
 
+# Etiqueta de lo público. La ingesta marca así los documentos sin `acl:` y `tribu-rag` filtra en
+# Milvus con JSON_CONTAINS_ANY(allowed_roles, requester_roles): si no se añade a los roles de
+# TODO usuario, lo público no le aparece a nadie (con `requester_roles` vacío no matchea nada).
+PUBLIC_ACL = "publico"
+
+
+def effective_acls(user: UserContext) -> frozenset[str]:
+    """ACLs con las que consulta un usuario: las suyas más la pública."""
+
+    return frozenset(user.acls) | {PUBLIC_ACL}
+
+
 def filter_by_acl(
     citations: Iterable[Citation], user: UserContext
 ) -> tuple[Citation, ...]:
@@ -76,7 +88,7 @@ def filter_by_acl(
     for c in citations:
         if not c.source_uri:
             continue
-        if c.required_acl and not (c.required_acl & user.acls):
+        if c.required_acl and not (c.required_acl & effective_acls(user)):
             continue
         visible.append(c)
     return tuple(visible)
@@ -103,7 +115,7 @@ async def answer_query(
 
     log = audit_log or NullAuditLog()
     candidates = await retriever.retrieve(
-        query.question, top_k=query.top_k, requester_roles=user.acls
+        query.question, top_k=query.top_k, requester_roles=effective_acls(user)
     )
     visible = filter_by_acl(candidates, user)
     visible_uris = {c.source_uri for c in visible}
@@ -266,9 +278,9 @@ async def tribu_rag_retriever(
 
 
 _GROUNDED_SYSTEM_PROMPT = (
-    "Eres el asistente de trámites de la comuna de Santiago. Responde ÚNICAMENTE con la "
-    "información de las fuentes que se te entregan a continuación; si no alcanzan para "
-    "responder, dilo explícitamente. Nunca añadas datos que no estén en las fuentes."
+    "Eres un asistente que responde en español ÚNICAMENTE con la información de las fuentes "
+    "que se te entregan a continuación; si no alcanzan para responder, dilo explícitamente. "
+    "Nunca añadas datos que no estén en las fuentes. Puedes usar listas y negritas en Markdown."
 )
 
 
@@ -286,7 +298,7 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
         self._client = TribuHttpClient(EgressAllowlist(allowed_hosts=allowed_hosts))
 
     async def generate(self, question: str, citations: Sequence[Citation]) -> str:
-        # `c.text` viene de munistgo.cl (contenido de terceros, no confiable) — se envuelve con
+        # `c.text` viene del corpus (contenido de terceros, no confiable) — se envuelve con
         # tribu-guardrails (`render_untrusted_as_data`, ver módulo `tool_poisoning`) antes de
         # concatenarlo en el prompt: delimitador estructural inequívoco + escapado de `<`, para
         # que ninguna cita pueda forjar la frontera del bloque ni pasar por instrucción del

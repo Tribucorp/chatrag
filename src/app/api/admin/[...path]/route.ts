@@ -1,14 +1,23 @@
-// Proxy genérico del BFF hacia `/admin/*` de chatrag-api. A diferencia de `/api/chat/route.ts`,
-// este NO adjunta ningún secreto propio: reenvía tal cual el `Authorization` que ya trae la
-// petición del navegador — quien administra el panel escribe el bearer de admin
-// (`CHATRAG_ADMIN_TOKEN` del backend) en la UI, el BFF solo evita que el navegador tenga que
-// conocer `CHATRAG_API_URL` directamente (sigue siendo server-only, ver .env.example).
+// Proxy genérico del BFF hacia `/admin/*` de chatrag-api. Dos llaves independientes:
+// 1. sesión de tribu-auth con el rol de administración (`ADMIN_ROLE`) (se comprueba aquí: 401 sin sesión, 403 sin
+//    el rol), y
+// 2. el bearer de admin del backend (`CHATRAG_ADMIN_TOKEN`), que quien administra escribe en la
+//    UI y este proxy reenvía tal cual — el BFF no lo conoce ni lo inventa.
+// El navegador nunca conoce `CHATRAG_API_URL` (server-only, ver .env.example).
 
 import { NextResponse } from "next/server";
+
+import { getSessionIdentity } from "@/lib/session";
 
 const API_URL = process.env.CHATRAG_API_URL ?? "http://localhost:8080";
 
 async function proxy(request: Request, path: string[]): Promise<Response> {
+  const identity = await getSessionIdentity(request.headers);
+  if (!identity) return NextResponse.json({ detail: "falta sesión" }, { status: 401 });
+  if (!identity.isAdmin) {
+    return NextResponse.json({ detail: "requiere el rol de administración" }, { status: 403 });
+  }
+
   const search = new URL(request.url).search;
   const upstreamUrl = `${API_URL}/admin/${path.join("/")}${search}`;
 

@@ -33,7 +33,7 @@ export function Home({ email }: { email: string }) {
       <ChatAgent />
 
       <footer className="mt-12 text-center text-[11px] text-white/35">
-        RAG sobre munistgo.cl · Tribu SDK (on-prem, NVIDIA-native)
+        Respuestas con fuente · Tribu SDK (on-prem, NVIDIA-native)
       </footer>
     </main>
   );
