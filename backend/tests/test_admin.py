@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from chatrag_api import admin
@@ -150,6 +151,48 @@ def test_upload_source_rechaza_document_id_con_ruta(tmp_path):
     )
     assert resp.status_code == 400
     assert not (tmp_path.parent / "fuera.md").exists()
+
+
+@pytest.mark.parametrize(
+    "document_id",
+    [
+        "../fuera.md",
+        "/etc/passwd.md",
+        "sub/dir.md",
+        "..\\fuera.md",
+        ".md",
+        ".oculto.md",
+        "con espacio.md",
+        "nulo\x00.md",
+        "tramité.md",
+        "a" * 200 + ".md",
+    ],
+)
+def test_upload_source_rechaza_document_id_fuera_de_la_lista_blanca(tmp_path, document_id):
+    client = _client(knowledge_dir=str(tmp_path / "kb"))
+    resp = client.post(
+        "/admin/sources",
+        headers={"Authorization": "Bearer s3cr3t0"},
+        json={"document_id": document_id, "text": "x"},
+    )
+    assert resp.status_code == 400
+    assert list((tmp_path / "kb").iterdir()) == []
+
+
+def test_upload_source_no_escapa_por_symlink(tmp_path):
+    fuera = tmp_path / "fuera"
+    fuera.mkdir()
+    kb = tmp_path / "kb"
+    kb.mkdir()
+    (kb / "enlace.md").symlink_to(fuera / "destino.md")
+    client = _client(knowledge_dir=str(kb))
+    resp = client.post(
+        "/admin/sources",
+        headers={"Authorization": "Bearer s3cr3t0"},
+        json={"document_id": "enlace.md", "text": "x"},
+    )
+    assert resp.status_code == 400
+    assert not (fuera / "destino.md").exists()
 
 
 def test_upload_source_rechaza_extension_distinta_de_md(tmp_path):

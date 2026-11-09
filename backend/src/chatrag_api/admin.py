@@ -13,6 +13,7 @@ token.
 from __future__ import annotations
 
 import hmac
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -73,6 +74,32 @@ async def reindex(
     return await ingestor.ingest_markdown_dir(directory)
 
 
+# Lista blanca, no lista negra: nombre de archivo simple (sin ruta, sin oculto, sin byte nulo),
+# ASCII, terminado en .md. Cualquier otra cosa es 400 — más estricto de lo imprescindible a
+# propósito: el nombre acaba en el sistema de archivos del servidor.
+_DOCUMENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}\.md")
+
+
+def _safe_source_path(knowledge_dir: str, document_id: str) -> Path:
+    """Ruta destino de un documento subido, o 400. Dos defensas independientes: lista blanca
+    del nombre y, además, que la ruta resuelta quede DENTRO de `knowledge_dir` (por si un
+    symlink o un cambio futuro de la lista blanca abriera una salida)."""
+
+    if not _DOCUMENT_ID_RE.fullmatch(document_id):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "document_id debe ser un nombre de archivo simple terminado en .md: letras y "
+                "números ASCII, '.', '_' o '-', sin ruta ni punto inicial (máx. 123 caracteres)"
+            ),
+        )
+    base = Path(knowledge_dir).resolve()
+    target = (base / document_id).resolve()
+    if not target.is_relative_to(base):
+        raise HTTPException(status_code=400, detail="document_id fuera de knowledge_dir")
+    return target
+
+
 class UploadSourceRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -92,16 +119,10 @@ async def upload_source(
     consultable sin esperar a un reindex manual."""
 
     settings: Settings = request.app.state.settings
-    filename = Path(body.document_id).name
-    if filename != body.document_id or not filename.endswith(".md"):
-        raise HTTPException(
-            status_code=400,
-            detail="document_id debe ser un nombre de archivo simple terminado en .md, sin ruta",
-        )
-    directory = Path(settings.knowledge_dir)
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / filename).write_text(body.text, encoding="utf-8")
-    return await ingestor.ingest_text(filename, body.text)
+    Path(settings.knowledge_dir).mkdir(parents=True, exist_ok=True)
+    target = _safe_source_path(settings.knowledge_dir, body.document_id)
+    target.write_text(body.text, encoding="utf-8")
+    return await ingestor.ingest_text(target.name, body.text)
 
 
 @router.get("/index-status", dependencies=[Depends(verify_admin_bearer)])
