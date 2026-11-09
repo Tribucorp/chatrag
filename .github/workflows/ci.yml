@@ -76,9 +76,23 @@ jobs:
             exit 1
           fi
           git config --global url."https://x-access-token:${TRIBU_SDK_PAT}@github.com/".insteadOf "https://github.com/"
+      - name: Toolchain de Rust del SDK (tribu-audit y tribu-crypto, núcleo PyO3)
+        # El rust-toolchain.toml del SDK fija la versión exacta. Si no se instala antes, uv
+        # compila tribu-audit y tribu-crypto en paralelo y los dos rustup descargan el mismo
+        # toolchain a la vez (carrera: "could not rename 'downloaded' file"). Se lee de la
+        # MISMA tag que fija pyproject.toml, para no duplicar el pin aquí.
+        env:
+          TRIBU_SDK_PAT: ${{ secrets.TRIBU_SDK_PAT }}
+        run: |
+          tag=$(grep -m1 -o 'tag = "v[0-9.]*"' pyproject.toml | cut -d'"' -f2)
+          toolchain=$(curl -sf -H "Authorization: Bearer ${TRIBU_SDK_PAT}" \
+              -H "Accept: application/vnd.github.raw" \
+              "https://api.github.com/repos/Tribucorp/tribu-sdk/contents/rust-toolchain.toml?ref=${tag}" \
+            | grep -m1 '^channel' | cut -d'"' -f2)
+          [ -n "$toolchain" ] || { echo "::error::no pude leer rust-toolchain.toml de tribu-sdk@${tag}"; exit 1; }
+          echo "tribu-sdk@${tag} → Rust ${toolchain}"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
       - uses: astral-sh/setup-uv@v3
-      # tribu-audit y tribu-crypto tienen núcleo Rust (maturin): rustup/cargo ya vienen en
-      # ubuntu-latest.
       - run: uv sync --frozen --python 3.12
       - run: uv run --no-sync ruff check src tests
       - run: uv run --no-sync mypy --strict src/chatrag_api
