@@ -1,0 +1,34 @@
+# Imagen de producción del frontend (Next.js 16, App Router) para el despliegue en DGX Spark
+# (Fase D, ver deploy/docker-compose.chatrag-spark.yml). Usa `output: "standalone"`
+# (next.config.ts) para copiar solo server.js + el node_modules mínimo que Next traza por uso
+# real, no todo node_modules/ — imagen final de decenas de MB en vez de cientos.
+#
+# El BFF (src/app/api/*) sigue corriendo server-side dentro de este mismo contenedor: el
+# navegador nunca ve CHATRAG_API_URL ni el bearer de servicio, exactamente igual que en dev
+# (ver CLAUDE.md) — contenedorizar no cambia esa arquitectura, solo dónde corre `next start`.
+
+FROM node:24-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json .npmrc ./
+# @tribu/auth sale de GitHub Packages (privado, ADR-0020 del SDK): el token entra como secreto
+# de BuildKit, solo durante este RUN — nunca como ARG/ENV, así no queda en ninguna capa.
+# `docker compose build` lo toma de NODE_AUTH_TOKEN (ver docker-compose.chatrag-spark.yml).
+RUN --mount=type=secret,id=node_auth_token,required=true \
+    NODE_AUTH_TOKEN="$(cat /run/secrets/node_auth_token)" npm ci
+COPY . .
+# CHATRAG_API_URL/CHATRAG_AUTH_SECRET reales se inyectan en runtime (docker-compose.chatrag-
+# spark.yml). `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: se le da un
+# valor de relleno SOLO a este RUN (no queda en la imagen final, que es otra etapa).
+RUN CHATRAG_AUTH_SECRET=build-placeholder-no-es-un-secreto-real-0000 npm run build
+
+FROM node:24-slim AS run
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+COPY --from=build /app/.next/standalone ./
+COPY --from=build /app/.next/static ./.next/static
+# Sin public/ en este repo todavía (sin assets estáticos propios) — si se añade, descomentar:
+# COPY --from=build /app/public ./public
+EXPOSE 3000
+CMD ["node", "server.js"]

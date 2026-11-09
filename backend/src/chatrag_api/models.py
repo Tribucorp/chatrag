@@ -40,9 +40,14 @@ class Citation(BaseModel):
     source_uri: str = Field(min_length=1)
     title: str = ""
     score: float = 0.0
-    required_acl: str | None = None
-    """Etiqueta de acceso que exige este fragmento. `None` = público. Si está y el usuario no la
-    tiene, la cita se descarta en el servidor."""
+    required_acl: frozenset[str] = frozenset()
+    """Roles que dan acceso a este fragmento — mismo modelo que `allowed_roles` de
+    `tribu_rag.store.ChunkMetadata` (conjunto, no una sola etiqueta): visible si
+    `required_acl & user.acls` no es vacío. Conjunto vacío = público. Alineado a propósito con
+    tribu-rag: el retriever real (`rag.py: tribu_rag_retriever`) ya filtra server-side con este
+    mismo criterio (`requester_roles`) antes de que el chunk llegue aquí — `filter_by_acl` es la
+    segunda capa (defensa en profundidad), no la única, y usar la misma forma de conjunto evita
+    tener que traducir entre dos modelos de ACL distintos."""
 
 
 class Answer(BaseModel):

@@ -10,6 +10,11 @@ build
 next-env.d.ts
 .vercel
 
+# Estado de runtime (Fase B, theming) — nunca versionar el tema editado en vivo desde
+# /admin/theme; solo aplica cuando no hay Postgres configurado (ver backend/src/chatrag_api/
+# theme.py: JsonFileThemeStore).
+/theme.json
+
 # Python (backend)
 __pycache__/
 *.pyc
@@ -18,3 +23,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
+
+# Despliegue (Fase D, DGX Spark) — secretos reales (NGC_API_KEY, bearers) y wheels tribu-*
+# construidos desde tribu-sdk (ver deploy/Dockerfile.backend); nunca versionar ninguno de los
+# dos. Los .example sí se versionan.
+/deploy/.env.chatrag-spark
+/deploy/wheels/

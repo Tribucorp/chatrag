@@ -8,6 +8,19 @@
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* Tokens de theming (Fase B) — valores por defecto; `layout.tsx` los sobreescribe inline en
+   <html> con lo que devuelva GET /theme (SSR, ver src/lib/get-theme.ts). Quedan también aquí
+   como fallback defensivo, no como la fuente de verdad. */
+:root {
+  --chatrag-accent: #3b82f6;
+  --chatrag-accent-secondary: #d52b1e;
+  --chatrag-bg: #050505;
+  --chatrag-font: system-ui, -apple-system, sans-serif;
+  --chatrag-radius: 1rem;
+  --chatrag-gap: 1rem;
+  --chatrag-padding: 1rem;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -18,7 +31,7 @@ body {
   padding: 0;
   background: var(--color-background);
   color: var(--color-foreground);
-  font-family: var(--font-sans);
+  font-family: var(--chatrag-font), var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 

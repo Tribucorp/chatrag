@@ -1,0 +1,43 @@
+# Imagen de producción de chatrag-api (Fase D, DGX Spark). DESVIACIÓN DELIBERADA del `uv sync`
+# normal (README/CI): backend/pyproject.toml consume el SDK como dependencias git fijadas a una
+# tag (ADR-0020 del SDK), y ni el Spark ni este build tienen credenciales git de Tribucorp — a
+# propósito. Los 6 wheels tribu-* (http, rag, audit, crypto, guardrails, voice) los construye
+# deploy/despliegue_spark.sh (fase 2) desde un `git archive` de ESA MISMA tag, y se copian al
+# contexto de build como deploy/wheels/*.whl antes de `docker build`.
+#
+# tribu-audit y tribu-crypto tienen núcleo nativo (PyO3/Rust) y por tanto NO son portables
+# entre plataformas: se compilan en el propio Spark (aarch64 Linux), nunca en el Mac. Los otros
+# 4 son Python puro (`py3-none-any`).
+
+FROM python:3.12-slim AS build
+WORKDIR /app
+RUN pip install --no-cache-dir uv
+COPY backend/pyproject.toml backend/README.md* ./
+COPY backend/src ./src
+COPY deploy/wheels ./wheels
+# Los tribu-* vienen de ./wheels (ver arriba), el resto de PyPI normal. `--find-links` deja que
+# uv resuelva las dependencias ENTRE tribu-* (guardrails → audit, crypto) contra esos wheels y
+# no contra PyPI. `--no-deps` en el segundo paso: chatrag_api ya tiene sus deps instaladas y
+# sus [tool.uv.sources] git no son resolubles aquí.
+RUN uv venv /opt/venv
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN uv pip install --no-cache --find-links ./wheels \
+        "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" "asyncpg>=0.29" "pymilvus>=2.5" \
+        tribu-http tribu-rag tribu-audit tribu-crypto tribu-guardrails tribu-voice \
+    && uv pip install --no-cache --no-deps -e .
+
+FROM python:3.12-slim AS run
+WORKDIR /app
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /app/src /app/src
+COPY backend/pyproject.toml /app/pyproject.toml
+# Seed inicial del corpus (ver el servicio seed-knowledge en docker-compose.chatrag-spark.yml):
+# copiado UNA VEZ al volumen con nombre /knowledge si está vacío, nunca pisa documentos subidos
+# después vía POST /admin/sources — este directorio en la imagen es solo el punto de partida.
+COPY knowledge /seed-knowledge
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8080
+CMD ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

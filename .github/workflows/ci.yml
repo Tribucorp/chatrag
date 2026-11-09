@@ -6,25 +6,94 @@ on:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    # @tribu/auth = npm:@tribucorp/tribu-auth (GitHub Packages, privado de la organización —
+    # ADR-0020 del SDK). Requiere que el paquete dé acceso de lectura a este repo: Settings
+    # del paquete → "Manage Actions access" → Tribucorp/chatrag.
+    permissions:
+      contents: read
+      packages: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: valor solo para que
+      # el build de CI no aborte; nunca sirve tráfico real.
+      CHATRAG_AUTH_SECRET: ci-build-placeholder-no-es-un-secreto-real-0000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
       - run: npm ci
       - run: npm run lint
+      - run: npm test
       - run: npm run build
   backend:
+    # Instala el SDK DE VERDAD (dependencias git fijadas a un tag, ADR-0020 del SDK) — sin
+    # --no-deps: mypy y los tests de integración corren contra el código real de tribu-*,
+    # no contra su ausencia. Requiere el secret TRIBU_SDK_PAT (PAT fine-grained, `contents:
+    # read` sobre Tribucorp/tribu-sdk). Fail-closed: sin el secret, el job falla en vez de
+    # pasar en verde sin haber probado el SDK.
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: chatrag
+          POSTGRES_PASSWORD: chatrag
+          POSTGRES_DB: chatrag_audit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     defaults:
       run:
         working-directory: backend
+    env:
+      CHATRAG_TEST_AUDIT_DATABASE_URL: postgresql://chatrag:chatrag@localhost:5432/chatrag_audit_test
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Sin esto, checkout deja un `http.extraheader` con el GITHUB_TOKEN de este repo que
+          # tiene prioridad sobre el PAT de abajo y no puede leer tribu-sdk (403 en uv sync).
+          persist-credentials: false
+      - name: Acceso de solo lectura a Tribucorp/tribu-sdk
+        env:
+          TRIBU_SDK_PAT: ${{ secrets.TRIBU_SDK_PAT }}
+        run: |
+          if [ -z "$TRIBU_SDK_PAT" ]; then
+            echo "::error::Falta el secret TRIBU_SDK_PAT (contents:read sobre Tribucorp/tribu-sdk)"
+            exit 1
+          fi
+          # Diagnóstico explícito (nunca imprime el token): 401 = token inválido/caducado;
+          # 403 = pendiente de aprobación de la org o sin permiso Contents; 404 = el token no
+          # ve el repo (resource owner distinto de Tribucorp o repo no seleccionado).
+          code=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${TRIBU_SDK_PAT}" \
+            https://api.github.com/repos/Tribucorp/tribu-sdk/contents/README.md)
+          if [ "$code" != "200" ]; then
+            echo "::error::TRIBU_SDK_PAT no puede leer Tribucorp/tribu-sdk (HTTP $code)"
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${TRIBU_SDK_PAT}@github.com/".insteadOf "https://github.com/"
+      - name: Toolchain de Rust del SDK (tribu-audit y tribu-crypto, núcleo PyO3)
+        # El rust-toolchain.toml del SDK fija la versión exacta. Si no se instala antes, uv
+        # compila tribu-audit y tribu-crypto en paralelo y los dos rustup descargan el mismo
+        # toolchain a la vez (carrera: "could not rename 'downloaded' file"). Se lee de la
+        # MISMA tag que fija pyproject.toml, para no duplicar el pin aquí.
+        env:
+          TRIBU_SDK_PAT: ${{ secrets.TRIBU_SDK_PAT }}
+        run: |
+          tag=$(grep -m1 -o 'tag = "v[0-9.]*"' pyproject.toml | cut -d'"' -f2)
+          toolchain=$(curl -sf -H "Authorization: Bearer ${TRIBU_SDK_PAT}" \
+              -H "Accept: application/vnd.github.raw" \
+              "https://api.github.com/repos/Tribucorp/tribu-sdk/contents/rust-toolchain.toml?ref=${tag}" \
+            | grep -m1 '^channel' | cut -d'"' -f2)
+          [ -n "$toolchain" ] || { echo "::error::no pude leer rust-toolchain.toml de tribu-sdk@${tag}"; exit 1; }
+          echo "tribu-sdk@${tag} → Rust ${toolchain}"
+          rustup toolchain install "$toolchain" --profile minimal --component rustfmt,clippy
       - uses: astral-sh/setup-uv@v3
-      - run: uv venv --python 3.12
-      - run: uv pip install fastapi uvicorn pydantic httpx pytest pytest-asyncio mypy ruff
-      - run: uv pip install --no-deps -e .
+      - run: uv sync --frozen --python 3.12
       - run: uv run --no-sync ruff check src tests
       - run: uv run --no-sync mypy --strict src/chatrag_api
-      - run: uv run --no-sync pytest tests -q
+      - run: uv run --no-sync pytest tests -q -m ""
