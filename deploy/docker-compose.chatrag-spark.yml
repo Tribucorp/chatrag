@@ -249,10 +249,10 @@ services:
       CHATRAG_NIM_ASR_URL: http://nim-asr:9000
       CHATRAG_NIM_EMBED_MODEL_ID: ${CHATRAG_NIM_EMBED_MODEL_ID:-nvidia/llama-nemotron-embed-1b-v2}
       CHATRAG_NIM_RERANK_MODEL_ID: ${CHATRAG_NIM_RERANK_MODEL_ID:-nvidia/llama-nemotron-rerank-vl-1b-v2}
-      # El model_id real lo reporta el propio NIM en /v1/models tras el primer arranque (mismo
-      # criterio que ingesta_corpus.py del SDK para el embed) — deploy/despliegue_spark.sh lo
-      # consulta y lo pasa aquí; el default es una suposición razonable, no verificada.
-      CHATRAG_NIM_CHAT_MODEL: ${CHATRAG_NIM_CHAT_MODEL:-nemotron}
+      # Nombre que el NIM de chat reporta en /v1/models: el de la imagen por defecto
+      # (nvidia-nemotron-nano-9b-v2-dgx-spark), verificado en spark-69f8 con esa misma imagen.
+      # Si cambias NIM_CHAT_IMAGE, cambia esto también (la fase 7 lo detecta: la consulta falla).
+      CHATRAG_NIM_CHAT_MODEL: ${CHATRAG_NIM_CHAT_MODEL:-nvidia/nemotron-nano-9b-v2}
       CHATRAG_EGRESS_HOSTS: "nim-embed,nim-rerank,nim-chat,nim-tts,nim-asr"
       CHATRAG_VOICE_ENABLED: ${CHATRAG_VOICE_ENABLED:-0}
       CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
