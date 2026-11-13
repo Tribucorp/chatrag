@@ -19,6 +19,9 @@ COPY . .
 # Voz en el navegador: NEXT_PUBLIC_* se incrusta al compilar (lo pasa el compose como build arg).
 ARG NEXT_PUBLIC_VOICE_ENABLED=0
 ENV NEXT_PUBLIC_VOICE_ENABLED=${NEXT_PUBLIC_VOICE_ENABLED}
+# Lista de fuentes bajo cada respuesta (1 = visible, el comportamiento del producto).
+ARG NEXT_PUBLIC_SHOW_CITATIONS=1
+ENV NEXT_PUBLIC_SHOW_CITATIONS=${NEXT_PUBLIC_SHOW_CITATIONS}
 # CHATRAG_API_URL/CHATRAG_AUTH_SECRET reales se inyectan en runtime (docker-compose.chatrag-
 # spark.yml). `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: se le da un
 # valor de relleno SOLO a este RUN (no queda en la imagen final, que es otra etapa).

@@ -1,0 +1,116 @@
+# Fase D, perfil "compartido" — ChatRAG en una DGX Spark que YA sirve los NIM y Milvus (hoy
+# spark-69f8, el stack `rag-milvus-*` que también usa x9). Solo añade lo propio del producto:
+# chatrag-api + frontend. Ni un NIM ni un Milvus más: en esa máquina no caben (memoria unificada
+# casi llena) y chocarían con los puertos 8001-8003/19530 que ya están en uso.
+#
+# Diferencias con docker-compose.chatrag-spark.yml (perfil completo, Spark dedicada):
+#   - `network_mode: host`: los NIM/Milvus existentes publican solo en 127.0.0.1 del host, así
+#     que la app tiene que vivir en esa misma red para alcanzarlos sin abrirlos a la tailnet.
+#     Contrapartida: cada servicio fija su propia interfaz de escucha (abajo), loopback por
+#     defecto — mismo criterio de guarda que el perfil completo, nunca 0.0.0.0.
+#   - Voz apagada: en esa Spark no hay un NIM de ASR propio de ChatRAG (el TTS de 127.0.0.1:9320
+#     es de X9Voz y no se toma prestado).
+#   - Sin ingesta automática: el corpus ya está indexado en la colección del tenant en ese
+#     Milvus. Reindexar es explícito (`REINDEXAR=1` en despliegue_spark.sh, fase 6).
+#
+# Uso (lo hace deploy/despliegue_spark.sh con SPARK_PERFIL=compartido):
+#   docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark-compartido.yml up -d
+
+name: chatrag
+
+services:
+  # Mismo init-container que el perfil completo: copia knowledge/*.md al volumen solo si está
+  # vacío (no pisa lo subido por POST /admin/sources). Los títulos de las citas salen de aquí.
+  seed-knowledge:
+    image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
+    command: ["sh", "-c", "[ -n \"$$(ls -A /knowledge 2>/dev/null)\" ] || cp -r /seed-knowledge/. /knowledge/"]
+    volumes:
+      - chatrag-knowledge:/knowledge
+    restart: "no"
+
+  chatrag-api:
+    image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.backend
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      seed-knowledge:
+        condition: service_completed_successfully
+    # Con red de host, el `--host 0.0.0.0` del CMD de la imagen abriría el backend a la tailnet:
+    # solo loopback (el único cliente es el frontend, en esta misma máquina).
+    command: ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "127.0.0.1", "--port", "8091"]
+    environment:
+      CHATRAG_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
+      CHATRAG_EMBED_DIM: "2048"
+      CHATRAG_TENANT_ID: ${CHATRAG_TENANT_ID:-ventisca-ti}
+      # `localhost`, no `127.0.0.1`: tribu-http bloquea toda IP literal privada/loopback aunque
+      # esté en la allowlist (anti-SSRF, ADR-0004 del SDK); el nombre allowlisted sí pasa.
+      CHATRAG_MILVUS_URI: http://localhost:19530
+      CHATRAG_NIM_EMBED_URL: http://localhost:8002
+      CHATRAG_NIM_RERANK_URL: http://localhost:8003
+      CHATRAG_NIM_CHAT_URL: http://localhost:8001
+      CHATRAG_NIM_EMBED_MODEL_ID: ${CHATRAG_NIM_EMBED_MODEL_ID:-nvidia/llama-nemotron-embed-1b-v2}
+      CHATRAG_NIM_RERANK_MODEL_ID: ${CHATRAG_NIM_RERANK_MODEL_ID:-nvidia/llama-nemotron-rerank-vl-1b-v2}
+      # El que sirve rag-milvus-nim-llm-1 (verificado en /v1/models de :8001).
+      CHATRAG_NIM_CHAT_MODEL: ${CHATRAG_COMPARTIDO_NIM_CHAT_MODEL:-nvidia/nemotron-nano-9b-v2}
+      CHATRAG_EGRESS_HOSTS: "localhost"
+      CHATRAG_VOICE_ENABLED: "0"
+      CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      CHATRAG_ADMIN_TOKEN: ${CHATRAG_ADMIN_TOKEN:?falta CHATRAG_ADMIN_TOKEN}
+      CHATRAG_KNOWLEDGE_DIR: /knowledge
+      CHATRAG_THEME_FILE: /data/theme.json
+    volumes:
+      - chatrag-knowledge:/knowledge
+      - chatrag-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health')"]
+      interval: 30s
+      start_period: 20s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    image: ${CHATRAG_FRONTEND_IMAGE:-chatrag-frontend:latest}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_VOICE_ENABLED: "0"
+        NEXT_PUBLIC_SHOW_CITATIONS: ${CHATRAG_SHOW_CITATIONS:-1}
+      secrets:
+        - node_auth_token
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      chatrag-api:
+        condition: service_healthy
+    environment:
+      # Interfaz de escucha del servidor standalone de Next. Loopback por defecto: se llega por
+      # túnel SSH (`ssh -L 3001:localhost:3000 <spark>` → http://localhost:3001). Para el equipo
+      # por la tailnet, la IP Tailscale del Spark — nunca 0.0.0.0.
+      HOSTNAME: ${CHATRAG_FRONTEND_BIND_HOST:-127.0.0.1}
+      PORT: "3000"
+      CHATRAG_API_URL: http://127.0.0.1:8091
+      CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      CHATRAG_AUTH_SECRET: ${CHATRAG_AUTH_SECRET:?falta CHATRAG_AUTH_SECRET}
+      # Origen con el que el navegador ve la app (better-auth valida cookies/origen contra él).
+      # Default: el túnel SSH a :3001 del Mac (el :3000 del Mac suele estar ocupado por `npm run dev`).
+      CHATRAG_AUTH_URL: ${CHATRAG_COMPARTIDO_AUTH_URL:-http://localhost:3001}
+      CHATRAG_AUTH_DEMO_SEED: ${CHATRAG_AUTH_DEMO_SEED:-0}
+      NEXT_PUBLIC_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://' + process.env.HOSTNAME + ':3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      start_period: 20s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  chatrag-knowledge:
+  chatrag-data:
+
+secrets:
+  node_auth_token:
+    environment: NODE_AUTH_TOKEN

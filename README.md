@@ -178,6 +178,32 @@ a la siguiente sesión sin reiniciar el proceso. Un `voice_id` fuera del catálo
 - **Errores estructurados**: cualquier excepción no manejada se traduce a JSON (nunca la página
   HTML 500 por defecto de Starlette) y queda en el log con `X-Request-Id` para correlacionar.
 
+## Citas
+
+El generador recibe las fuentes numeradas y marca cada dato con `[n]`; el backend
+(`rag.select_cited`) devuelve **solo las citas que el texto marca**, renumeradas por orden de
+aparición, con el título del `title:` de la cabecera del corpus. Una respuesta que no usa nada
+del corpus (un saludo) sale sin citas; una racha de más de 3 fuentes seguidas se descarta como
+volcado. La traza de `tribu-audit` guarda `retrieved` (lo que vio el modelo) y `shown` (lo
+citado). `NEXT_PUBLIC_SHOW_CITATIONS=0` oculta la lista y las marcas solo en la UI.
+
+## Despliegue en DGX Spark (Fase D)
+
+`deploy/despliegue_spark.sh` (se ejecuta desde el Mac, por fases e idempotente) con dos perfiles:
+
+- **completo** (por defecto): Spark dedicada — los NIM de chat/embed/rerank/TTS/ASR, Milvus y la
+  app (`deploy/docker-compose.chatrag-spark.yml`).
+- **compartido** (`SPARK_PERFIL=compartido`): Spark que ya sirve los NIM y Milvus (hoy
+  spark-69f8) — solo `chatrag-api` + frontend en red de host, ambos en loopback
+  (`deploy/docker-compose.chatrag-spark-compartido.yml`). Sin voz, sin pull de NIM y sin
+  ingesta (el corpus ya está en ese Milvus; `REINDEXAR=1` la fuerza).
+
+```bash
+SPARK_PERFIL=compartido bash deploy/despliegue_spark.sh 5    # build + up (la fase 2 solo si cambia la tag del SDK)
+SPARK_PERFIL=compartido bash deploy/despliegue_spark.sh 7    # humo: /health, /login y una consulta citada
+ssh -N -L 3001:localhost:3000 administrador@spark-69f8.taild09659.ts.net   # → http://localhost:3001
+```
+
 ## Documentación de negocio
 
 No se duplica aquí: vive en `01_PRODUCTOS/FORGE/40_CHATRAG/` (plan, mercado, VPack).
