@@ -44,6 +44,7 @@ from chatrag_api import admin
 from chatrag_api.audit import AuditLog, NullAuditLog
 from chatrag_api.config import Settings
 from chatrag_api.conversations import ConversationLog
+from chatrag_api.ingest import DocumentTitles
 from chatrag_api.middleware import RateLimiter, RateLimitMiddleware, RequestLoggingMiddleware
 from chatrag_api.models import Answer, Query, UserContext
 from chatrag_api.rag import ChatGenerator, Retriever, answer_query
@@ -133,6 +134,7 @@ def create_app(
                 nim_rerank_url=app_settings.nim_rerank_url,
                 nim_rerank_model_id=app_settings.nim_rerank_model_id,
                 allowed_hosts=app_settings.egress_allowed_hosts,
+                titles=DocumentTitles(Path(app_settings.knowledge_dir)),
             )
         if app.state.generator is None:  # pragma: no cover - requiere el NIM de chat on-prem
             from chatrag_api.rag import tribu_nim_chat_generator

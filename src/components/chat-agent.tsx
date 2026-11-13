@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Send, Loader2, ShieldCheck, Mic, MicOff, Square, LogOut } from "lucide-react";
 
 import { signOut } from "@/lib/auth-client";
+import { stripCiteMarkers } from "@/lib/citations";
 import { isSafeHref, Markdown } from "@/lib/markdown";
 import { blobToWav16kMono } from "@/lib/wav";
 
@@ -30,8 +31,9 @@ type VoiceSession = { token_id: string; face_id: string; expires_at: number };
 
 const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
 // Lista de fuentes bajo cada respuesta: visible por defecto (regla "citas o abstención").
-// NEXT_PUBLIC_SHOW_CITATIONS=0 solo la oculta en la UI — el backend sigue devolviendo y
-// auditando las citas igual.
+// El backend solo devuelve las que la respuesta cita, numeradas como las marcas `[n]` del
+// texto. NEXT_PUBLIC_SHOW_CITATIONS=0 oculta lista y marcas solo en la UI — el backend sigue
+// devolviendo y auditando las citas igual.
 const SHOW_CITATIONS = process.env.NEXT_PUBLIC_SHOW_CITATIONS !== "0";
 
 export function ChatAgent() {
@@ -98,7 +100,7 @@ export function ChatAgent() {
           ...t,
           { role: "assistant", content: answer.text, citations: answer.citations },
         ]);
-        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, answer.text);
+        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, stripCiteMarkers(answer.text));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Error consultando el asistente");
       } finally {
@@ -216,12 +218,19 @@ export function ChatAgent() {
                       : undefined
                   }
                 >
-                  {turn.role === "assistant" ? <Markdown text={turn.content} /> : turn.content}
+                  {turn.role === "assistant" ? (
+                    <Markdown
+                      text={SHOW_CITATIONS ? turn.content : stripCiteMarkers(turn.content)}
+                    />
+                  ) : (
+                    turn.content
+                  )}
                 </div>
                 {SHOW_CITATIONS && turn.citations && turn.citations.length > 0 && (
                   <ul className="mt-2 flex flex-col gap-1 text-left">
                     {turn.citations.map((c, j) => (
                       <li key={j} className="text-[11px] text-white/45">
+                        <span className="mr-1 tabular-nums text-white/60">[{j + 1}]</span>
                         {isSafeHref(c.source_uri) ? (
                           <a
                             href={c.source_uri}

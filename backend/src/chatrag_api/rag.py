@@ -11,7 +11,8 @@ un fragmento sin `source_uri` se descarta, y una cita cuya ACL no posee el usuar
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -94,6 +95,52 @@ def filter_by_acl(
     return tuple(visible)
 
 
+# Marca de cita que el generador pone tras cada dato: `[1]`, `[2, 3]`. El espacio previo se
+# captura para no dejar huecos sueltos al quitar una marca inválida.
+_CITE_MARKER = re.compile(r"(?P<sp>[ \t]*)\[(?P<ids>\d{1,3}(?:\s*,\s*\d{1,3})*)\]")
+# Una racha de marcas seguidas (`[1][2][3]`) respalda UN dato; más de este número de fuentes a
+# la vez no es una cita, es el modelo volcando la lista de fuentes (visto con nano-9b-v2 ante un
+# "gracias": "¡De nada! [1][2]…[8]") y se descarta entera.
+MAX_SOURCES_PER_CLAIM = 3
+_CITE_RUN = re.compile(r"(?:[ \t]*\[\d{1,3}(?:\s*,\s*\d{1,3})*\])+")
+
+
+def select_cited(text: str, citations: Sequence[Citation]) -> tuple[str, tuple[Citation, ...]]:
+    """Se queda solo con las citas que la respuesta usa de verdad.
+
+    El generador recibe las fuentes numeradas desde 1 y marca cada dato con `[n]`. Aquí se
+    recogen esas marcas en orden de aparición, se descartan las que no apuntan a ninguna fuente
+    entregada (un número inventado no se convierte en procedencia) y se **renumeran** para que
+    `[1]` del texto sea la primera cita devuelta. Una respuesta sin marcas (un saludo, una
+    aclaración) sale sin citas: no afirma nada del corpus, así que no hay procedencia que
+    mostrar — y lo que no se citó no se presenta como fuente. Una racha de más de
+    `MAX_SOURCES_PER_CLAIM` fuentes seguidas se descarta: no respalda ningún dato concreto."""
+
+    def ids(match: re.Match[str]) -> list[int]:
+        return [int(n) - 1 for n in match.group("ids").split(",")]
+
+    def drop_dumps(run: re.Match[str]) -> str:
+        n = sum(len(ids(m)) for m in _CITE_MARKER.finditer(run.group(0)))
+        return "" if n > MAX_SOURCES_PER_CLAIM else run.group(0)
+
+    text = _CITE_RUN.sub(drop_dumps, text)
+
+    order: list[int] = []
+    for m in _CITE_MARKER.finditer(text):
+        for i in ids(m):
+            if 0 <= i < len(citations) and i not in order:
+                order.append(i)
+    renumber = {old: new + 1 for new, old in enumerate(order)}
+
+    def rewrite(m: re.Match[str]) -> str:
+        kept = list(dict.fromkeys(renumber[i] for i in ids(m) if i in renumber))
+        if not kept:
+            return ""
+        return m.group("sp") + "".join(f"[{k}]" for k in kept)
+
+    return _CITE_MARKER.sub(rewrite, text), tuple(citations[i] for i in order)
+
+
 async def answer_query(
     retriever: Retriever,
     generator: ChatGenerator,
@@ -107,7 +154,9 @@ async def answer_query(
     Si tras el filtrado no queda ninguna cita, se **abstiene** en vez de inventar: devuelve una
     respuesta marcada `abstained` que dice que no hay base accesible — nunca una respuesta sin
     procedencia (alineado con tribu-confidence y la regla de "sin procedencia no hay respuesta").
-    El generador ni se invoca en ese caso: no hay base sobre la que anclar nada.
+    El generador ni se invoca en ese caso: no hay base sobre la que anclar nada. Con base
+    accesible, la respuesta lleva solo las citas que el texto marca (`select_cited`), no todo lo
+    recuperado.
 
     `audit_log` (ver `audit.py`, sobre `tribu-audit`) registra qué se mostró y qué se bloqueó
     por ACL — `None` usa `NullAuditLog` (sin traza; la auditoría es opt-in, ver `config.py`).
@@ -148,11 +197,13 @@ async def answer_query(
         )
 
     ordered = tuple(sorted(visible, key=lambda c: c.score, reverse=True))
-    text = await generator.generate(query.question, ordered)
+    raw_text = await generator.generate(query.question, ordered)
+    text, cited = select_cited(raw_text, ordered)
     logger.info(
-        "respondido: user_id=%s citas_mostradas=%d bloqueadas=%d",
+        "respondido: user_id=%s recuperadas=%d citadas=%d bloqueadas=%d",
         user.user_id,
         len(ordered),
+        len(cited),
         len(blocked),
     )
     await log.record(
@@ -160,11 +211,13 @@ async def answer_query(
         action="chatrag.query.answered",
         payload={
             "question": query.question,
-            "shown": [c.source_uri for c in ordered],
+            # Lo que el generador tuvo delante vs. lo que la respuesta cita y ve el usuario.
+            "retrieved": [c.source_uri for c in ordered],
+            "shown": [c.source_uri for c in cited],
             "blocked": blocked,
         },
     )
-    return Answer(text=text, citations=ordered, abstained=False)
+    return Answer(text=text, citations=cited, abstained=False)
 
 
 class _TribuRagRetriever:  # pragma: no cover - requiere NIM + Milvus reales
@@ -188,11 +241,19 @@ class _TribuRagRetriever:  # pragma: no cover - requiere NIM + Milvus reales
         rerank_client: NimRerankClient,
         *,
         tenant_id: str,
+        titles: Callable[[str], str] | None = None,
     ) -> None:
         self._store = store
         self._embed = embed_provider
         self._rerank = rerank_client
         self._tenant_id = tenant_id
+        # `Chunk` no trae el título del documento: lo resuelve el producto desde la cabecera
+        # del corpus (`ingest.DocumentTitles`). Sin resolvedor, el id del documento.
+        self._titles = titles
+
+    def _title(self, chunk_id: str) -> str:
+        document_id = chunk_id.split("::", 1)[0]
+        return (self._titles(document_id) if self._titles else "") or document_id
 
     async def retrieve(
         self, question: str, *, top_k: int, requester_roles: frozenset[str]
@@ -220,7 +281,7 @@ class _TribuRagRetriever:  # pragma: no cover - requiere NIM + Milvus reales
             Citation(
                 text=chunk.text,
                 source_uri=chunk.metadata.source_uri or "",
-                title=chunk.chunk_id,
+                title=self._title(chunk.chunk_id),
                 score=(n - i) / n if n else 0.0,
                 required_acl=chunk.metadata.allowed_roles,
             )
@@ -238,6 +299,7 @@ async def tribu_rag_retriever(
     nim_rerank_url: str,
     nim_rerank_model_id: str,
     allowed_hosts: frozenset[str],
+    titles: Callable[[str], str] | None = None,
 ) -> Retriever:  # pragma: no cover - requiere NIM + Milvus reales
     """Construye el `_TribuRagRetriever` de producción. Import perezoso: el paquete del SDK
     solo se exige cuando de verdad se usa el retriever real, no al importar este módulo (así
@@ -274,7 +336,9 @@ async def tribu_rag_retriever(
     if persisted_index is not None:
         verify_dimension_guard(embed_provider, persisted_index)
     rerank_client = NimRerankClient(http, base_url=nim_rerank_url, model_id=nim_rerank_model_id)
-    return _TribuRagRetriever(store, embed_provider, rerank_client, tenant_id=tenant_id)
+    return _TribuRagRetriever(
+        store, embed_provider, rerank_client, tenant_id=tenant_id, titles=titles
+    )
 
 
 # `/no_think` desactiva el razonamiento de los Nemotron (nano-9b-v2, 3.5-lightning): sin él,
@@ -284,7 +348,12 @@ _GROUNDED_SYSTEM_PROMPT = (
     "/no_think\n"
     "Eres un asistente que responde en español ÚNICAMENTE con la información de las fuentes "
     "que se te entregan a continuación; si no alcanzan para responder, dilo explícitamente. "
-    "Nunca añadas datos que no estén en las fuentes. Puedes usar listas y negritas en Markdown."
+    "Nunca añadas datos que no estén en las fuentes. Puedes usar listas y negritas en Markdown.\n"
+    "Cada fuente lleva un número (atributo id). Justo después de cada dato que tomes de una "
+    "fuente, pon su número entre corchetes, por ejemplo [1] o [2][3]. Cita solo las fuentes "
+    "que realmente uses. Si el mensaje es un saludo, un agradecimiento, una despedida o no "
+    "necesita información de las fuentes, responde con una frase breve SIN ningún número entre "
+    "corchetes. Nunca pongas una lista de números al final de la respuesta."
 )
 
 
@@ -323,11 +392,13 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
             render_untrusted_as_data,
         )
 
+        # Numeradas desde 1: el número es lo que el modelo cita (`[n]`) y `select_cited`
+        # resuelve de vuelta a esta misma secuencia.
         contexto = "\n\n".join(
             render_untrusted_as_data(
-                c.text, tag="citation", attributes=f'source_uri="{c.source_uri}"'
+                c.text, tag="citation", attributes=f'id="{i}" source_uri="{c.source_uri}"'
             )
-            for c in citations
+            for i, c in enumerate(citations, start=1)
         )
         payload = {
             "model": self._model,

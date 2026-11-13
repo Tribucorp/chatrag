@@ -45,6 +45,7 @@ class FrontMatter(BaseModel):
 
     source: str | None = None
     acl: frozenset[str] = frozenset()
+    title: str | None = None
 
 
 _ACL_TAG = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
@@ -64,6 +65,7 @@ def parse_front_matter(text: str) -> tuple[FrontMatter, str]:
         return FrontMatter(), text
     source: str | None = None
     acl: frozenset[str] = frozenset()
+    title: str | None = None
     for line in m.group(1).splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
@@ -73,7 +75,40 @@ def parse_front_matter(text: str) -> tuple[FrontMatter, str]:
             tags = {t.strip().lower() for t in value.split(",") if t.strip()}
             valid = frozenset(t for t in tags if _ACL_TAG.fullmatch(t))
             acl = valid if valid and valid == tags else frozenset({"acl-invalida"})
-    return FrontMatter(source=source, acl=acl), text[m.end():].lstrip("\n")
+        elif key == "title" and value:
+            title = value[:200]
+    return FrontMatter(source=source, acl=acl, title=title), text[m.end():].lstrip("\n")
+
+
+class DocumentTitles:
+    """Título legible de cada documento del corpus (`title:` de su cabecera), por
+    `document_id` (= nombre del fichero, el mismo id con el que se ingiere). `tribu_rag.Chunk`
+    no guarda el título, así que la cita lo resuelve aquí en vez de mostrar el id del fragmento.
+    Solo se relee cuando cambia algún fichero o el propio directorio (un `stat` por fichero
+    por consulta: el corpus es de decenas de documentos, no miles)."""
+
+    def __init__(self, directory: Path) -> None:
+        self._dir = directory
+        self._stamp: tuple[float, ...] | None = None
+        self._titles: dict[str, str] = {}
+
+    def __call__(self, document_id: str) -> str:
+        try:
+            files = sorted(self._dir.glob("*.md"))
+            stamp = (self._dir.stat().st_mtime, *(f.stat().st_mtime for f in files))
+        except OSError:
+            return ""
+        if stamp != self._stamp:
+            titles: dict[str, str] = {}
+            for f in files:
+                try:
+                    meta, _ = parse_front_matter(f.read_text(encoding="utf-8"))
+                except OSError:
+                    continue
+                if meta.title:
+                    titles[f.name] = meta.title
+            self._titles, self._stamp = titles, stamp
+        return self._titles.get(document_id, "")
 
 
 class IngestReport(BaseModel):
