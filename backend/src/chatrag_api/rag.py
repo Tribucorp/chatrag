@@ -277,7 +277,11 @@ async def tribu_rag_retriever(
     return _TribuRagRetriever(store, embed_provider, rerank_client, tenant_id=tenant_id)
 
 
+# `/no_think` desactiva el razonamiento de los Nemotron (nano-9b-v2, 3.5-lightning): sin él,
+# el modelo escribe ~1000 tokens de "pensamiento" antes de responder (25-36 s en la GB10) y la
+# consulta excede cualquier timeout razonable. Los modelos que no lo reconocen lo ignoran.
 _GROUNDED_SYSTEM_PROMPT = (
+    "/no_think\n"
     "Eres un asistente que responde en español ÚNICAMENTE con la información de las fuentes "
     "que se te entregan a continuación; si no alcanzan para responder, dilo explícitamente. "
     "Nunca añadas datos que no estén en las fuentes. Puedes usar listas y negritas en Markdown."
@@ -289,13 +293,23 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
     deny-by-default + circuit breaker; el POST no reintenta — no idempotente). Contrato
     OpenAI-compatible `/v1/chat/completions`, el estándar de los NIM de LLM."""
 
-    def __init__(self, nim_chat_url: str, *, model: str, allowed_hosts: frozenset[str]) -> None:
+    def __init__(
+        self,
+        nim_chat_url: str,
+        *,
+        model: str,
+        allowed_hosts: frozenset[str],
+        timeout_seconds: float,
+    ) -> None:
         from tribu_http.client import TribuHttpClient
         from tribu_http.egress import EgressAllowlist
 
         self._url = f"{nim_chat_url.rstrip('/')}/v1/chat/completions"
         self._model = model
-        self._client = TribuHttpClient(EgressAllowlist(allowed_hosts=allowed_hosts))
+        # El default de TribuHttpClient (10 s) sirve para embed/rerank, no para generar texto.
+        self._client = TribuHttpClient(
+            EgressAllowlist(allowed_hosts=allowed_hosts), timeout=timeout_seconds
+        )
 
     async def generate(self, question: str, citations: Sequence[Citation]) -> str:
         # `c.text` viene del corpus (contenido de terceros, no confiable) — se envuelve con
@@ -334,10 +348,16 @@ class _TribuNimChatGenerator:  # pragma: no cover - requiere el NIM de chat on-p
 
 
 def tribu_nim_chat_generator(
-    nim_chat_url: str, *, model: str, allowed_hosts: frozenset[str]
+    nim_chat_url: str,
+    *,
+    model: str,
+    allowed_hosts: frozenset[str],
+    timeout_seconds: float = 60.0,
 ) -> ChatGenerator:  # pragma: no cover - requiere el NIM de chat on-prem
     """Construye el `ChatGenerator` de producción. Import perezoso: `tribu-http` solo se exige
     cuando de verdad se usa el generador real, no al importar este módulo (los tests del
     producto corren con un doble, sin el NIM)."""
 
-    return _TribuNimChatGenerator(nim_chat_url, model=model, allowed_hosts=allowed_hosts)
+    return _TribuNimChatGenerator(
+        nim_chat_url, model=model, allowed_hosts=allowed_hosts, timeout_seconds=timeout_seconds
+    )

@@ -141,6 +141,7 @@ def create_app(
                 app_settings.nim_chat_url,
                 model=app_settings.nim_chat_model,
                 allowed_hosts=app_settings.egress_allowed_hosts,
+                timeout_seconds=app_settings.nim_chat_timeout_seconds,
             )
         if app.state.audit_log is None:
             if (

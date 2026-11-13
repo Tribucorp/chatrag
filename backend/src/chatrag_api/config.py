@@ -112,7 +112,9 @@ class Settings(BaseModel):
     rate_limit_window_seconds: float = Field(default=60.0, gt=0)
     # Timeout de la llamada completa retriever+generador en /query — evita que una consulta se
     # cuelgue para siempre si un NIM deja de responder. `asyncio.TimeoutError` se traduce a 504.
-    query_timeout_seconds: float = Field(default=30.0, gt=0)
+    query_timeout_seconds: float = Field(default=90.0, gt=0)
+    # Timeout HTTP de la llamada al NIM de chat (generación); debe quedar por debajo del de /query.
+    nim_chat_timeout_seconds: float = Field(default=60.0, gt=0)
 
     # Buffer en memoria de conversaciones recientes (ver conversations.py) — siempre activo,
     # sin configuración, para /admin/conversations y /admin/metrics. Se pierde al reiniciar
@@ -163,7 +165,10 @@ class Settings(BaseModel):
             rate_limit_window_seconds=float(
                 os.environ.get("CHATRAG_RATE_LIMIT_WINDOW_SECONDS", "60")
             ),
-            query_timeout_seconds=float(os.environ.get("CHATRAG_QUERY_TIMEOUT_SECONDS", "30")),
+            query_timeout_seconds=float(os.environ.get("CHATRAG_QUERY_TIMEOUT_SECONDS", "90")),
+            nim_chat_timeout_seconds=float(
+                os.environ.get("CHATRAG_NIM_CHAT_TIMEOUT_SECONDS", "60")
+            ),
             conversation_log_max_entries=int(
                 os.environ.get("CHATRAG_CONVERSATION_LOG_MAX_ENTRIES", "200")
             ),
