@@ -26,6 +26,11 @@ ENV NEXT_PUBLIC_SHOW_CITATIONS=${NEXT_PUBLIC_SHOW_CITATIONS}
 # spark.yml). `next build` evalúa src/lib/auth.ts, que falla-cerrado sin secreto: se le da un
 # valor de relleno SOLO a este RUN (no queda en la imagen final, que es otra etapa).
 RUN CHATRAG_AUTH_SECRET=build-placeholder-no-es-un-secreto-real-0000 npm run build
+# Distribución a terceros: ningún source map (reconstruirían el TS original desde el bundle) ni
+# fuente fuera de lo que Next traza. La build falla si queda alguno.
+RUN set -eux; find .next/standalone .next/static -name "*.map" -delete; \
+    ! find .next/standalone .next/static -name "*.map" | grep -q .; \
+    ! find .next/standalone -path "*/src/*" \( -name "*.ts" -o -name "*.tsx" \) -not -path "*/node_modules/*" | grep -q .
 
 FROM node:24-slim AS run
 WORKDIR /app
@@ -34,6 +39,8 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
+# Sin root: el usuario `node` (uid 1000) de la imagen base.
+USER node
 # Sin public/ en este repo todavía (sin assets estáticos propios) — si se añade, descomentar:
 # COPY --from=build /app/public ./public
 EXPOSE 3000

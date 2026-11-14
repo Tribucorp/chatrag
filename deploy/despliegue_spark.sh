@@ -89,7 +89,9 @@ if corre 2; then
   sh_spark "command -v cargo >/dev/null || [ -x \$HOME/.cargo/bin/cargo ]" || fallo "falta Rust en el Spark — curl -LsSf https://sh.rustup.rs | sh -s -- -y"
   sh_spark "command -v \$HOME/.local/bin/uv >/dev/null" || fallo "falta uv en el Spark — curl -LsSf https://astral.sh/uv/install.sh | sh"
   sh_spark "rm -rf /tmp/chatrag-sdk /tmp/chatrag-wheels && mkdir -p /tmp/chatrag-sdk"
-  tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
+  # COPYFILE_DISABLE: el tar de macOS mete los xattrs como ficheros AppleDouble `._*`, que
+  # acababan dentro de los wheels (p. ej. tribu_audit/.___init__.py).
+  COPYFILE_DISABLE=1 tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
   for PKG in tribu-audit tribu-crypto; do
     sh_spark "cd /tmp/chatrag-sdk/python/$PKG && PATH=\$HOME/.cargo/bin:\$PATH \$HOME/.local/bin/uv build --wheel -o /tmp/chatrag-wheels 2>&1 | tail -1" \
       || fallo "build de $PKG en el Spark"
