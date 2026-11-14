@@ -85,22 +85,22 @@ if corre 2; then
     ( cd "$EXPORT/python/$PKG" && uv build --wheel -o "$LOCAL_REPO/deploy/wheels" 2>&1 | tail -1 ) \
       || fallo "build de $PKG"
   done
-  echo "  → tribu-audit y tribu-crypto tienen núcleo Rust (PyO3): se construyen EN el Spark (aarch64 Linux)"
+  echo "  → tribu-audit, tribu-crypto y tribu-licensing tienen núcleo Rust (PyO3): se construyen EN el Spark (aarch64 Linux)"
   sh_spark "command -v cargo >/dev/null || [ -x \$HOME/.cargo/bin/cargo ]" || fallo "falta Rust en el Spark — curl -LsSf https://sh.rustup.rs | sh -s -- -y"
   sh_spark "command -v \$HOME/.local/bin/uv >/dev/null" || fallo "falta uv en el Spark — curl -LsSf https://astral.sh/uv/install.sh | sh"
   sh_spark "rm -rf /tmp/chatrag-sdk /tmp/chatrag-wheels && mkdir -p /tmp/chatrag-sdk"
   # COPYFILE_DISABLE: el tar de macOS mete los xattrs como ficheros AppleDouble `._*`, que
   # acababan dentro de los wheels (p. ej. tribu_audit/.___init__.py).
   COPYFILE_DISABLE=1 tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
-  for PKG in tribu-audit tribu-crypto; do
+  for PKG in tribu-audit tribu-crypto tribu-licensing; do
     sh_spark "cd /tmp/chatrag-sdk/python/$PKG && PATH=\$HOME/.cargo/bin:\$PATH \$HOME/.local/bin/uv build --wheel -o /tmp/chatrag-wheels 2>&1 | tail -1" \
       || fallo "build de $PKG en el Spark"
   done
   scp -i "$SPARK_KEY" "$SPARK_SSH:/tmp/chatrag-wheels/*.whl" "$LOCAL_REPO/deploy/wheels/" \
     || fallo "no pude traer los wheels nativos del Spark"
   ls "$LOCAL_REPO/deploy/wheels"/*.whl | sed 's/^/  /'
-  [ "$(ls "$LOCAL_REPO/deploy/wheels"/*.whl | wc -l)" -eq 6 ] || fallo "esperaba 6 wheels tribu-*"
-  ok "6 wheels tribu-* de $SDK_TAG en deploy/wheels/ (no versionados, ver .gitignore)"
+  [ "$(ls "$LOCAL_REPO/deploy/wheels"/*.whl | wc -l)" -eq 7 ] || fallo "esperaba 7 wheels tribu-*"
+  ok "7 wheels tribu-* de $SDK_TAG en deploy/wheels/ (no versionados, ver .gitignore)"
 fi
 
 # ── FASE 3 · Repos en el Spark (rsync — sin credenciales git en el Spark) ───

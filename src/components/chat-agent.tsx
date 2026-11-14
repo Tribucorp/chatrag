@@ -94,6 +94,12 @@ export function ChatAgent() {
           router.push("/login");
           return;
         }
+        if (resp.status === 503) {
+          // Modo inerte de la puerta de licencia (backend licencia.py): su `detail` explica al
+          // usuario qué pasa, mejor que un código HTTP.
+          const body = await resp.json().catch(() => null);
+          if (body?.licencia && typeof body.detail === "string") throw new Error(body.detail);
+        }
         if (!resp.ok) throw new Error(`El backend respondió ${resp.status}`);
         const answer: Answer = await resp.json();
         setTurns((t) => [

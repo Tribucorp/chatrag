@@ -1,11 +1,11 @@
 # Imagen de producción de chatrag-api (Fase D, DGX Spark). DESVIACIÓN DELIBERADA del `uv sync`
 # normal (README/CI): backend/pyproject.toml consume el SDK como dependencias git fijadas a una
 # tag (ADR-0020 del SDK), y ni el Spark ni este build tienen credenciales git de Tribucorp — a
-# propósito. Los 6 wheels tribu-* (http, rag, audit, crypto, guardrails, voice) los construye
+# propósito. Los 7 wheels tribu-* (http, rag, audit, crypto, guardrails, voice, licensing) los construye
 # deploy/despliegue_spark.sh (fase 2) desde un `git archive` de ESA MISMA tag, y se copian al
 # contexto de build como deploy/wheels/*.whl antes de `docker build`.
 #
-# tribu-audit y tribu-crypto tienen núcleo nativo (PyO3/Rust) y por tanto NO son portables
+# tribu-audit, tribu-crypto y tribu-licensing tienen núcleo nativo (PyO3/Rust) y por tanto NO son portables
 # entre plataformas: se compilan en el propio Spark (aarch64 Linux), nunca en el Mac. Los otros
 # 4 son Python puro (`py3-none-any`).
 
@@ -24,7 +24,7 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN uv pip install --no-cache --find-links ./wheels \
         "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" "asyncpg>=0.29" "pymilvus>=2.5" \
-        tribu-http tribu-rag tribu-audit tribu-crypto tribu-guardrails tribu-voice \
+        tribu-http tribu-rag tribu-audit tribu-crypto tribu-guardrails tribu-voice tribu-licensing \
     && uv pip install --no-cache --no-deps -e .
 
 FROM python:3.12-slim AS run

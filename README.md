@@ -41,6 +41,7 @@ Verificado contra el SDK **v1.0.0** (tabla «Estado real por módulo» de su CLA
 | `tribu-datagov` | Existe; evaluado para el filtro de ACL, no lo reemplaza (defensa en profundidad) |
 | `tribu-voice` | **Integrado** (`backend/src/chatrag_api/voice.py`) — TTS + avatar + token efímero reales; opt-in (`CHATRAG_VOICE_ENABLED`), revisión legal confirmada (ver CLAUDE.md), contrato de red con el NIM Riva sin verificar |
 | `tribu-demo-kit` | Existe (Parcial, plantilla ARM64 sin verificar). No integrado |
+| `tribu-licensing` | **Integrado** (`backend/src/chatrag_api/licencia.py`) — puerta de licencia por host de la imagen protegida: sobre Ed25519 `chatrag-license/v1` + huella del host verificados en la crate Rust, anti-rollback de reloj, modo inerte (503) si no cuadra. Horneada y obligatoria solo en `deploy/Dockerfile.backend.protegido`; apagada en el resto. Emisión: `deploy/emitir_licencia.py`; montajes: `deploy/docker-compose.licencia.yml` |
 
 ## Stack
 

@@ -190,3 +190,18 @@ def conversations(request: Request, limit: int = 50) -> list[ConversationEntry]:
 def metrics(request: Request, top_n: int = 10) -> RagMetrics:
     conversation_log: ConversationLog = request.app.state.conversation_log
     return conversation_log.metrics(top_n=top_n)
+
+
+@router.get("/licencia", dependencies=[Depends(verify_admin_bearer)])
+async def get_licencia(request: Request) -> dict[str, object]:
+    """Estado de la puerta de licencia + la solicitud de huella de este host (lo que se envía a
+    Tribu para pedir una licencia). Sigue disponible en modo inerte, justo para eso."""
+
+    from chatrag_api.licencia import LicenseGate, solicitud_de_huella
+
+    settings: Settings = request.app.state.settings
+    gate: LicenseGate = request.app.state.license_gate
+    return {
+        "puerta": gate.resumen(),
+        "solicitud": solicitud_de_huella(settings.license_host_root),
+    }

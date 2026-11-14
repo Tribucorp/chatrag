@@ -69,6 +69,15 @@ Tribu SDK** — su feedback define la DX del SDK.
     verificar** — no hay ninguna imagen NIM de Riva pineada en el SDK; ver docstring de
     `voice.py`.
   - `tribu-demo-kit` — existe (Parcial en v1.0.0, plantilla ARM64 sin verificar), no integrado.
+  - `tribu-licensing` — **Integrado** (`licencia.py`) como puerta de licencia por host de la
+    imagen que se entrega a terceros (`deploy/Dockerfile.backend.protegido`). API confirmada
+    leyendo la tag v1.0.0 del SDK en disco: `verify_envelope` (formato `chatrag-license/v1`,
+    clave, firma, esquema), `collect_host_component_hashes` y `check_clock_rollback` en la
+    crate Rust; en ChatRAG solo la comparación de conjuntos de la huella (la crate solo la
+    expone dentro de `unseal`). Si no cuadra → **modo inerte** (503 salvo `/health`, `/theme`,
+    `/admin/licencia`), no crash. La obligatoriedad y las claves públicas van **horneadas** en
+    la build (`_licencia_horneada.py`, compilado por Nuitka), nunca por entorno: apagada en
+    dev, tests e imagen normal. Emisión fuera de la imagen: `deploy/emitir_licencia.py`.
 
 ## Reglas propias (además de las del SDK)
 

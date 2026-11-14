@@ -1,0 +1,24 @@
+# Override para correr la imagen PROTEGIDA (deploy/Dockerfile.backend.protegido) en el host de un
+# tercero: la puerta de licencia (backend/src/chatrag_api/licencia.py) va horneada en esa imagen
+# y necesita leer la huella del host y el sobre emitido para ÉL. Se superpone a cualquiera de
+# los dos perfiles:
+#
+#   CHATRAG_API_IMAGE=chatrag-api:protegido CHATRAG_LICENSE_PATH=/etc/chatrag/license.json \
+#     docker compose -f docker-compose.chatrag-spark.yml -f docker-compose.licencia.yml up -d
+#
+# Sin licencia válida el servicio NO se cae: arranca en modo inerte (503 salvo /health, /theme y
+# /admin/licencia). Para pedir la licencia, `GET /admin/licencia` devuelve la solicitud de
+# huella, o: docker compose ... run --rm chatrag-api chatrag-licencia huella
+#
+# Los despliegues propios (imagen normal) NO usan este override: no necesitan /sys del host.
+
+services:
+  chatrag-api:
+    volumes:
+      # Huella del host (tribu-host-component/v1): machine-id, seriales NVMe, MAC físicas y
+      # serial DMI, de solo lectura. /sys entero y no solo /sys/class: las entradas de
+      # /sys/class/net son enlaces a ../../devices/... y deben resolverse dentro de /host.
+      - /etc/machine-id:/host/etc/machine-id:ro
+      - /sys:/host/sys:ro
+      # El sobre emitido para este host (deploy/emitir_licencia.py emitir).
+      - ${CHATRAG_LICENSE_PATH:?falta CHATRAG_LICENSE_PATH — ruta del license.json en el host}:/run/chatrag/license.json:ro
