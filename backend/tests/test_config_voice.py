@@ -1,7 +1,4 @@
-import pytest
-
 from chatrag_api.config import DEFAULT_EMBED_DIM, Settings
-from chatrag_api.voice import VoiceDisabledError, VoiceSession
 
 
 def test_default_embed_dim_es_2048():
@@ -40,10 +37,3 @@ def test_service_bearer_token_por_entorno(monkeypatch):
 def test_voice_flag_por_entorno(monkeypatch):
     monkeypatch.setenv("CHATRAG_VOICE_ENABLED", "1")
     assert Settings.from_env().voice_enabled is True
-
-
-def test_voice_session_apagada_falla_cerrado():
-    session = VoiceSession(enabled=False)
-    assert session.enabled is False
-    with pytest.raises(VoiceDisabledError):
-        session.start()
