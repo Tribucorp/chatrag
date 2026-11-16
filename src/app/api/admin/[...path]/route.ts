@@ -1,9 +1,8 @@
-// Proxy genérico del BFF hacia `/admin/*` de chatrag-api. Dos llaves independientes:
-// 1. sesión de tribu-auth con el rol de administración (`ADMIN_ROLE`) (se comprueba aquí: 401 sin sesión, 403 sin
-//    el rol), y
-// 2. el bearer de admin del backend (`CHATRAG_ADMIN_TOKEN`), que quien administra escribe en la
-//    UI y este proxy reenvía tal cual — el BFF no lo conoce ni lo inventa.
-// El navegador nunca conoce `CHATRAG_API_URL` (server-only, ver .env.example).
+// Proxy genérico del BFF hacia `/admin/*` de chatrag-api. La llave es la sesión de tribu-auth
+// con el rol de administración (`ADMIN_ROLE`): 401 sin sesión, 403 sin el rol. Con ella, el BFF
+// añade el bearer de admin del backend (`CHATRAG_ADMIN_TOKEN`, server-only) — quien administra no
+// lo escribe ni lo ve. Cualquier `Authorization` que mande el navegador se descarta.
+// El navegador nunca conoce `CHATRAG_API_URL` ni `CHATRAG_ADMIN_TOKEN` (ver .env.example).
 
 import { NextResponse } from "next/server";
 
@@ -18,12 +17,22 @@ async function proxy(request: Request, path: string[]): Promise<Response> {
     return NextResponse.json({ detail: "requiere el rol de administración" }, { status: 403 });
   }
 
+  // Se lee en cada petición (no al cargar el módulo): la build no ve el secreto, el runtime sí.
+  const adminToken = process.env.CHATRAG_ADMIN_TOKEN ?? "";
+  if (!adminToken) {
+    return NextResponse.json(
+      { detail: "el frontend no tiene CHATRAG_ADMIN_TOKEN configurado" },
+      { status: 503 }
+    );
+  }
+
   const search = new URL(request.url).search;
   const upstreamUrl = `${API_URL}/admin/${path.join("/")}${search}`;
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const authorization = request.headers.get("authorization");
-  if (authorization) headers.Authorization = authorization;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${adminToken}`,
+  };
 
   const hasBody = request.method !== "GET" && request.method !== "HEAD";
   const upstream = await fetch(upstreamUrl, {

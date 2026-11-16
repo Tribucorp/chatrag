@@ -28,24 +28,19 @@ type RagMetrics = {
   top_sources: SourceCount[];
 };
 
-const TOKEN_KEY = "chatrag-admin-token";
-
 export default function AdminConversationsPage() {
-  const [token, setToken] = useState("");
   const [entries, setEntries] = useState<ConversationEntry[] | null>(null);
   const [metrics, setMetrics] = useState<RagMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (tok: string) => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const [convResp, metricsResp] = await Promise.all([
-        fetch("/api/admin/conversations?limit=50", {
-          headers: { Authorization: `Bearer ${tok}` },
-        }),
-        fetch("/api/admin/metrics", { headers: { Authorization: `Bearer ${tok}` } }),
+        fetch("/api/admin/conversations?limit=50"),
+        fetch("/api/admin/metrics"),
       ]);
       if (!convResp.ok) throw new Error(`conversations respondió ${convResp.status}`);
       if (!metricsResp.ok) throw new Error(`metrics respondió ${metricsResp.status}`);
@@ -59,25 +54,9 @@ export default function AdminConversationsPage() {
   }, []);
 
   useEffect(() => {
-    const saved = sessionStorage.getItem(TOKEN_KEY);
-    if (saved) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- token de sessionStorage, ver src/app/admin/page.tsx
-      setToken(saved);
-      void load(saved);
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial desde el backend al montar (sistema externo)
+    void load();
   }, [load]);
-
-  if (!token) {
-    return (
-      <main className="mx-auto max-w-xl px-6 py-10 text-sm text-white/50">
-        Sin token de admin — entra primero en{" "}
-        <Link href="/admin" className="underline">
-          /admin
-        </Link>
-        .
-      </main>
-    );
-  }
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
@@ -90,7 +69,7 @@ export default function AdminConversationsPage() {
           ChatRAG · Conversaciones
         </span>
         <button
-          onClick={() => load(token)}
+          onClick={() => load()}
           disabled={loading}
           className="flex items-center gap-1 text-xs text-white/50 hover:text-white/80"
         >

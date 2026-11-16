@@ -124,8 +124,10 @@ frontend — **solo desarrollo local, nunca en producción**.
 
 ## Administración (`/admin`, `/admin/theme`)
 
-Protegido por `CHATRAG_ADMIN_TOKEN` (bearer propio, distinto de `CHATRAG_SERVICE_BEARER_TOKEN`;
-sin configurar, `/admin/*` responde 503 siempre, nunca abierto por defecto):
+Se entra con una cuenta con el rol de administración (`adminSoporte`). El BFF añade server-side
+el bearer `CHATRAG_ADMIN_TOKEN` del backend (propio, distinto de `CHATRAG_SERVICE_BEARER_TOKEN`;
+lo necesitan backend y frontend; sin configurar, `/admin/*` responde 503 siempre, nunca abierto
+por defecto) — quien administra nunca lo escribe ni lo ve:
 
 - **`/admin`** — dispara `POST /admin/reindex` (ingesta real a `tribu-rag`/Milvus, ver
   `backend/src/chatrag_api/ingest.py`), estado del índice (`GET /admin/index-status`) y la

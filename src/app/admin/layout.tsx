@@ -6,7 +6,7 @@ import { getSessionIdentity } from "@/lib/session";
 
 // Server Component: todo /admin/* exige sesión de tribu-auth con rol de administración (`ADMIN_ROLE`, acl.ts) antes de
 // pintar nada. El proxy /api/admin/* lo vuelve a comprobar en cada petición (esto solo evita
-// mostrar un panel que respondería 403), y el backend sigue exigiendo su bearer de admin.
+// mostrar un panel que respondería 403); el backend sigue exigiendo su bearer de admin, que añade el proxy.
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const identity = await getSessionIdentity(await headers());
   if (!identity) redirect("/login");

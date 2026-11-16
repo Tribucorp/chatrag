@@ -20,8 +20,9 @@ Tribu SDK** — su feedback define la DX del SDK.
   colores, logo, tipografía, densidad, estilo de burbuja, copy de la cabecera, y qué voz stock
   usa el asistente — ver `backend/src/chatrag_api/theme.py`) y `/admin/conversations` (vista
   operativa de conversaciones recientes + métricas de consumo del RAG, sobre un buffer en
-  memoria — `conversations.py` — distinto del audit trail), todos protegidos por
-  `CHATRAG_ADMIN_TOKEN`.
+  memoria — `conversations.py` — distinto del audit trail). Se entra con la sesión del rol de
+  administración; el BFF añade server-side el bearer `CHATRAG_ADMIN_TOKEN` del backend (nunca
+  llega al navegador).
 - **Backend** (`backend/`): FastAPI (`chatrag-api`) que consume los módulos del SDK como
   **dependencias git fijadas a una tag** (ADR-0020 del SDK, `docs/CONSUMIR_EL_SDK.md`; hoy
   **v1.0.0**, misma tag en todas las líneas de `[tool.uv.sources]`) — nunca vendorizar ni

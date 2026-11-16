@@ -6,22 +6,17 @@ import { ArrowLeft, Loader2, Palette } from "lucide-react";
 
 import { DEFAULT_THEME, VOICE_STOCK_CATALOG, type Theme } from "@/lib/theme";
 
-const TOKEN_KEY = "chatrag-admin-token";
-
 export default function AdminThemePage() {
-  const [token, setToken] = useState("");
   const [theme, setThemeState] = useState<Theme>(DEFAULT_THEME);
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
-  const load = useCallback(async (tok: string) => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const resp = await fetch("/api/admin/theme", {
-        headers: { Authorization: `Bearer ${tok}` },
-      });
+      const resp = await fetch("/api/admin/theme");
       if (!resp.ok) throw new Error(`GET /admin/theme respondió ${resp.status}`);
       setThemeState(await resp.json());
     } catch (e) {
@@ -32,12 +27,8 @@ export default function AdminThemePage() {
   }, []);
 
   useEffect(() => {
-    const savedToken = sessionStorage.getItem(TOKEN_KEY);
-    if (savedToken) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- token de sessionStorage, ver src/app/admin/page.tsx
-      setToken(savedToken);
-      void load(savedToken);
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial desde el backend al montar (sistema externo)
+    void load();
   }, [load]);
 
   const save = useCallback(async () => {
@@ -47,7 +38,7 @@ export default function AdminThemePage() {
     try {
       const resp = await fetch("/api/admin/theme", {
         method: "PUT",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(theme),
       });
       if (!resp.ok) throw new Error(`PUT /admin/theme respondió ${resp.status}`);
@@ -58,22 +49,10 @@ export default function AdminThemePage() {
     } finally {
       setLoading(false);
     }
-  }, [token, theme]);
+  }, [theme]);
 
   const field = <K extends keyof Theme>(key: K, value: Theme[K]) =>
     setThemeState((t) => ({ ...t, [key]: value }));
-
-  if (!token) {
-    return (
-      <main className="mx-auto max-w-xl px-6 py-10 text-sm text-white/50">
-        Sin token de admin — entra primero en{" "}
-        <Link href="/admin" className="underline">
-          /admin
-        </Link>
-        .
-      </main>
-    );
-  }
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-xl flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
