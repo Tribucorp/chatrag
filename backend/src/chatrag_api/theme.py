@@ -33,22 +33,22 @@ class Theme(BaseModel):
 
     app_name: str = "ChatRAG"
     logo_url: str | None = None
-    color_accent: str = "#3b82f6"
-    color_accent_secondary: str = "#d52b1e"
+    color_accent: str = "#14b8a6"
+    color_accent_secondary: str = "#f59e0b"
     color_background: str = "#050505"
     font_family: str = "system-ui, -apple-system, sans-serif"
     density: Literal["compact", "comfortable"] = "comfortable"
     bubble_style: Literal["rounded", "square"] = "rounded"
 
     # Copy de la cabecera (src/app/page.tsx) — antes hardcoded, ahora editable desde
-    # /admin/theme sin redeploy. Los defaults son la copy original de la comuna de Santiago.
-    eyebrow_text: str = "Ilustre Municipalidad de Santiago"
-    heading_text: str = "Asistente de la comuna de Santiago"
+    # /admin/theme sin redeploy. Los defaults son los del caso de demo actual (partner ficticio de soporte
+    # de servidores Dell); cada despliegue los cambia desde /admin/theme.
+    eyebrow_text: str = "Ventisca TI · empresa ficticia de demo"
+    heading_text: str = "Asistente de soporte PowerEdge"
     description_text: str = (
-        "Asistente oficial de la comuna de Santiago de Chile. Consúltame sobre trámites y "
-        "servicios municipales, direcciones del municipio, el alcalde Mario Desbordes o "
-        "cualquier información del sitio munistgo.cl. Escribe tu pregunta y te respondo con "
-        "el enlace directo del trámite y su fuente."
+        "Soporte técnico para servidores Dell PowerEdge: iDRAC, RAID PERC, firmware, "
+        "diagnóstico y garantía. Escribe tu consulta y te respondo citando la fuente — "
+        "documentación pública de Dell o la base de conocimiento de Ventisca TI."
     )
 
     # Voz (ver voice.py): qué voz STOCK de tribu_voice usa el asistente y con qué marca —

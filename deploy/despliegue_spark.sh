@@ -8,15 +8,28 @@
 # Uso:
 #   bash deploy/despliegue_spark.sh            # todas las fases en orden
 #   bash deploy/despliegue_spark.sh 3          # solo la fase 3
+#   SPARK_PERFIL=compartido bash deploy/despliegue_spark.sh
+#       # perfil "compartido": solo chatrag-api + frontend sobre los NIM y el Milvus que la Spark
+#       # YA sirve (spark-69f8) — ver deploy/docker-compose.chatrag-spark-compartido.yml.
+#       # Sin pull de NIM (fase 4 verifica que respondan) ni ingesta (fase 6, salvo REINDEXAR=1).
 #
 # Requisitos en el Mac: alias SSH "chatrag-spark" en ~/.ssh/config (o SPARK_HOST=usuario@host),
 # deploy/.env.chatrag-spark rellenado, y ~/repositorio/tribu-sdk clonado localmente (fuente
 # real de los wheels tribu-*, ver fase 2).
 set -euo pipefail
 
-SPARK="${SPARK_HOST:-spark-da29.taild09659.ts.net}"
+PERFIL="${SPARK_PERFIL:-completo}"
+case "$PERFIL" in
+  completo)   SPARK_DEFAULT=spark-da29.taild09659.ts.net; COMPOSE_FILE=docker-compose.chatrag-spark.yml ;;
+  compartido) SPARK_DEFAULT=spark-69f8.taild09659.ts.net; COMPOSE_FILE=docker-compose.chatrag-spark-compartido.yml ;;
+  *) printf 'SPARK_PERFIL desconocido: %s (completo|compartido)\n' "$PERFIL" >&2; exit 1 ;;
+esac
+SPARK="${SPARK_HOST:-$SPARK_DEFAULT}"
 SPARK_SSH="${SPARK_SSH_USER:-administrador}@${SPARK}"
 SPARK_KEY="${SPARK_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+# Config de ssh alternativa (p. ej. /dev/null si ~/.ssh/config tiene un error que hace fallar
+# a todo ssh); vacío = la de siempre.
+SSH_OPTS=(-i "$SPARK_KEY" -o IdentitiesOnly=yes ${SPARK_SSH_CONFIG:+-F "$SPARK_SSH_CONFIG"})
 REPO_DIR="\$HOME/repositorio/chatrag"
 SDK_DIR="\$HOME/repositorio/tribu-sdk"
 LOCAL_REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -27,16 +40,17 @@ FASE="${1:-todas}"
 azul(){ printf '\n\033[1;34m══ %s ══\033[0m\n' "$*"; }
 ok(){ printf '\033[1;32m  ✓ %s\033[0m\n' "$*"; }
 fallo(){ printf '\033[1;31m  ✗ %s\033[0m\n' "$*"; exit 1; }
-sh_spark(){ ssh -i "$SPARK_KEY" -o ConnectTimeout=10 "$SPARK_SSH" "$@"; }
+sh_spark(){ ssh "${SSH_OPTS[@]}" -o ConnectTimeout=10 "$SPARK_SSH" "$@"; }
 corre(){ [ "$FASE" = "todas" ] || [ "$FASE" = "$1" ]; }
 
 # ── FASE 0 · Conectividad + .env ─────────────────────────────────────────────
 if corre 0; then
   azul "FASE 0 · Conectividad desde el Mac"
   sh_spark true || fallo "SSH a '$SPARK_SSH' no responde."
-  ok "SSH a $SPARK_SSH funciona"
+  ok "SSH a $SPARK_SSH funciona (perfil $PERFIL)"
   [ -f "$ENVFILE" ] || fallo "falta $ENVFILE — copia deploy/.env.chatrag-spark.example y rellena"
   grep -q "changeme" "$ENVFILE" && fallo ".env.chatrag-spark aún tiene valores 'changeme'"
+  [ "$PERFIL" = compartido ] || grep -qE '^NGC_API_KEY=.+' "$ENVFILE" || fallo "falta NGC_API_KEY en $ENVFILE (los NIM la necesitan para bajar sus modelos)"
   ok ".env.chatrag-spark presente y sin placeholders"
   [ -n "$LOCAL_SDK" ] || fallo "no encuentro ~/repositorio/tribu-sdk junto a este repo — hace falta como fuente de los wheels tribu-* (fase 2)"
   ok "tribu-sdk local encontrado en $LOCAL_SDK"
@@ -71,41 +85,59 @@ if corre 2; then
     ( cd "$EXPORT/python/$PKG" && uv build --wheel -o "$LOCAL_REPO/deploy/wheels" 2>&1 | tail -1 ) \
       || fallo "build de $PKG"
   done
-  echo "  → tribu-audit y tribu-crypto tienen núcleo Rust (PyO3): se construyen EN el Spark (aarch64 Linux)"
+  echo "  → tribu-audit, tribu-crypto y tribu-licensing tienen núcleo Rust (PyO3): se construyen EN el Spark (aarch64 Linux)"
   sh_spark "command -v cargo >/dev/null || [ -x \$HOME/.cargo/bin/cargo ]" || fallo "falta Rust en el Spark — curl -LsSf https://sh.rustup.rs | sh -s -- -y"
   sh_spark "command -v \$HOME/.local/bin/uv >/dev/null" || fallo "falta uv en el Spark — curl -LsSf https://astral.sh/uv/install.sh | sh"
   sh_spark "rm -rf /tmp/chatrag-sdk /tmp/chatrag-wheels && mkdir -p /tmp/chatrag-sdk"
-  tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
-  for PKG in tribu-audit tribu-crypto; do
+  # COPYFILE_DISABLE: el tar de macOS mete los xattrs como ficheros AppleDouble `._*`, que
+  # acababan dentro de los wheels (p. ej. tribu_audit/.___init__.py).
+  COPYFILE_DISABLE=1 tar -C "$EXPORT" -c . | sh_spark "tar -x -C /tmp/chatrag-sdk" || fallo "copia del export al Spark"
+  for PKG in tribu-audit tribu-crypto tribu-licensing; do
     sh_spark "cd /tmp/chatrag-sdk/python/$PKG && PATH=\$HOME/.cargo/bin:\$PATH \$HOME/.local/bin/uv build --wheel -o /tmp/chatrag-wheels 2>&1 | tail -1" \
       || fallo "build de $PKG en el Spark"
   done
   scp -i "$SPARK_KEY" "$SPARK_SSH:/tmp/chatrag-wheels/*.whl" "$LOCAL_REPO/deploy/wheels/" \
     || fallo "no pude traer los wheels nativos del Spark"
   ls "$LOCAL_REPO/deploy/wheels"/*.whl | sed 's/^/  /'
-  [ "$(ls "$LOCAL_REPO/deploy/wheels"/*.whl | wc -l)" -eq 6 ] || fallo "esperaba 6 wheels tribu-*"
-  ok "6 wheels tribu-* de $SDK_TAG en deploy/wheels/ (no versionados, ver .gitignore)"
+  [ "$(ls "$LOCAL_REPO/deploy/wheels"/*.whl | wc -l)" -eq 7 ] || fallo "esperaba 7 wheels tribu-*"
+  ok "7 wheels tribu-* de $SDK_TAG en deploy/wheels/ (no versionados, ver .gitignore)"
 fi
 
 # ── FASE 3 · Repos en el Spark (rsync — sin credenciales git en el Spark) ───
 if corre 3; then
   azul "FASE 3 · Repos en el Spark"
+  # rsync no crea directorios intermedios: en un Spark recién usado no existe ~/repositorio.
+  sh_spark "mkdir -p repositorio/chatrag repositorio/tribu-sdk/python/tribu-rag/deploy"
   rsync -az --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
     --exclude 'target' --exclude 'rust' --exclude 'scripts' --exclude '.mypy_cache' \
-    --exclude '__pycache__' -e "ssh -i $SPARK_KEY" \
+    --exclude '__pycache__' -e "ssh ${SSH_OPTS[*]}" \
     "$LOCAL_SDK/python/tribu-rag/deploy/" "$SPARK_SSH:repositorio/tribu-sdk/python/tribu-rag/deploy/"
   rsync -az --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
-    --exclude '.next' --exclude '.mypy_cache' --exclude '__pycache__' -e "ssh -i $SPARK_KEY" \
+    --exclude '.next' --exclude '.mypy_cache' --exclude '__pycache__' \
+    --exclude '.env' --exclude '.env*.local' --exclude 'deploy/.env.chatrag-spark' \
+    --exclude '.mcp*.json' --exclude '.claude' --exclude '.npm-cache' --exclude '_producto' \
+    -e "ssh ${SSH_OPTS[*]}" \
     "$LOCAL_REPO/" "$SPARK_SSH:repositorio/chatrag/"
   ok "repos sincronizados en el Spark"
 fi
 
 # ── FASE 4 · NGC login + pull de NIMs (lo largo: decenas de GB) ─────────────
-if corre 4; then
+if corre 4 && [ "$PERFIL" = compartido ]; then
+  azul "FASE 4 · NIM y Milvus ya servidos por la Spark (perfil compartido: sin pull)"
+  for EP in 8001 8002 8003; do
+    ID=$(sh_spark "curl -sf -m 10 localhost:$EP/v1/models" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"][0]["id"])') \
+      || fallo "no hay NIM respondiendo en :$EP de la Spark"
+    ok ":$EP → $ID"
+  done
+  sh_spark "curl -s -m 10 -o /dev/null localhost:19530" || fallo "Milvus no responde en :19530 de la Spark"
+  ok "Milvus en :19530"
+elif corre 4; then
   azul "FASE 4 · NGC login + pull de NIMs (paciencia)"
   set -a; source "$ENVFILE"; set +a
   sh_spark "echo '$NGC_API_KEY' | docker login nvcr.io -u '\$oauthtoken' --password-stdin" || fallo "login nvcr.io"
-  for IMG in "$NIM_CHAT_IMAGE" "$NIM_EMBED_IMAGE" "$NIM_RERANK_IMAGE"; do
+  NIM_TTS_IMAGE="${NIM_TTS_IMAGE:-nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0}"
+  NIM_ASR_IMAGE="${NIM_ASR_IMAGE:-nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual@sha256:670db8fb668142017a12ef6fef1834e37119c3cd03180b87e5c26deb830d87d3}"
+  for IMG in "$NIM_CHAT_IMAGE" "$NIM_EMBED_IMAGE" "$NIM_RERANK_IMAGE" "$NIM_TTS_IMAGE" "$NIM_ASR_IMAGE"; do
     echo "  → pull $IMG"
     sh_spark "docker pull '$IMG'" || fallo "pull de $IMG"
   done
@@ -120,25 +152,40 @@ if corre 5; then
   # stdin — nunca en la línea de comandos remota (visible en `ps`) ni escrito a disco en el Spark.
   NPM_TOKEN="${NODE_AUTH_TOKEN:-$(gh auth token 2>/dev/null || true)}"
   [ -n "$NPM_TOKEN" ] || fallo "sin token para GitHub Packages: exporta NODE_AUTH_TOKEN o haz gh auth login"
-  printf '%s' "$NPM_TOKEN" | sh_spark "cd $REPO_DIR && NODE_AUTH_TOKEN=\$(cat) docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml build"
-  sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml up -d"
+  printf '%s' "$NPM_TOKEN" | sh_spark "cd $REPO_DIR && NODE_AUTH_TOKEN=\$(cat) docker compose --env-file deploy/.env.chatrag-spark -f deploy/$COMPOSE_FILE build"
+  sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/$COMPOSE_FILE up -d"
   echo "  → esperando salud de los servicios (el primer arranque de un NIM descarga el modelo: puede tardar)"
-  for i in $(seq 1 90); do
-    ESTADO=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml ps --format '{{.Name}} {{.Health}}'" 2>/dev/null || true)
+  # Hasta 60 min: el primer arranque de los NIM de Riva descarga y optimiza el modelo.
+  for i in $(seq 1 180); do
+    ESTADO=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/$COMPOSE_FILE ps --format '{{.Name}} {{.Health}}'" 2>/dev/null || true)
     echo "$ESTADO" | sed 's/^/    /'
-    echo "$ESTADO" | grep -vq -E 'healthy|^$' || { ok "todos los servicios healthy"; break; }
+    # Comparación exacta: `grep healthy` también casaría "unhealthy".
+    PENDIENTES=$(echo "$ESTADO" | awk 'NF==2 && $2!="healthy"' | wc -l | tr -d ' ')
+    echo "$ESTADO" | awk '$2=="unhealthy"{exit 1}' || fallo "hay servicios unhealthy — mira docker compose logs"
+    [ -n "$ESTADO" ] && [ "$PENDIENTES" = 0 ] && { ok "todos los servicios healthy"; break; }
+    [ "$i" = 180 ] && fallo "tras 60 min siguen servicios sin estar healthy"
     sleep 20
   done
 
   azul "Guardia · los servicios solo escuchan en 127.0.0.1 salvo que se haya fijado explícitamente"
-  for SVC in nim-chat nim-embed nim-rerank chatrag-api frontend; do
-    BINDING=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml port $SVC $([ "$SVC" = chatrag-api ] && echo 8080 || ([ "$SVC" = frontend ] && echo 3000 || echo 8000))" 2>/dev/null)
+  if [ "$PERFIL" = compartido ]; then
+    # Red de host: no hay puertos publicados que inspeccionar, se mira quién escucha de verdad.
+    sh_spark "ss -ltn | awk '{print \$4}' | grep -E ':(3000|8091)\$'" | sed 's/^/  escucha en /'
+    sh_spark "ss -ltn | awk '{print \$4}' | grep -qE '^(0\.0\.0\.0|\*|\[::\]):(3000|8091)\$'" \
+      && fallo "chatrag escucha en todas las interfaces — revisa CHATRAG_FRONTEND_BIND_HOST"
+  else
+  for SVC in nim-chat nim-embed nim-rerank nim-tts nim-asr chatrag-api frontend; do
+    case "$SVC" in chatrag-api) P=8080 ;; frontend) P=3000 ;; nim-tts|nim-asr) P=9000 ;; *) P=8000 ;; esac
+    BINDING=$(sh_spark "cd $REPO_DIR && docker compose --env-file deploy/.env.chatrag-spark -f deploy/$COMPOSE_FILE port $SVC $P" 2>/dev/null)
     echo "  $SVC → ${BINDING:-(sin publicar)}"
   done
+  fi
 fi
 
 # ── FASE 6 · Ingesta del corpus con embeddings REALES ────────────────────────
-if corre 6; then
+if corre 6 && [ "$PERFIL" = compartido ] && [ "${REINDEXAR:-0}" != 1 ]; then
+  azul "FASE 6 · Ingesta: omitida (perfil compartido — el corpus ya está en el Milvus de la Spark; REINDEXAR=1 para forzarla)"
+elif corre 6; then
   azul "FASE 6 · Ingesta del corpus knowledge/*.md (embeddings reales del NIM)"
   EMBED_ID=$(sh_spark "curl -s localhost:8002/v1/models" | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"][0]["id"])') \
     || fallo "el NIM de embeddings no responde en :8002 — ¿fase 5 completada?"
@@ -151,7 +198,17 @@ fi
 if corre 7; then
   azul "FASE 7 · Humo end-to-end"
   sh_spark "curl -sf localhost:8091/health" && echo && ok "chatrag-api /health"
-  sh_spark "curl -sf localhost:3000/ -o /dev/null -w '%{http_code}'" && echo && ok "frontend responde"
+  FRONT_HOST=$(grep -E '^CHATRAG_FRONTEND_BIND_HOST=' "$ENVFILE" | cut -d= -f2 || true); FRONT_HOST="${FRONT_HOST:-127.0.0.1}"
+  [ "$PERFIL" = completo ] && FRONT_HOST=127.0.0.1
+  sh_spark "curl -sf $FRONT_HOST:3000/login -o /dev/null -w '%{http_code}'" && echo && ok "frontend responde"
+  # Consulta real (embed → Milvus → rerank → chat), como lo haría el BFF: bearer de servicio +
+  # identidad declarada. Solo comprueba que hay respuesta no abstenida con al menos una cita.
+  sh_spark "curl -sf -m 120 -X POST localhost:8091/query -H 'content-type: application/json' \
+      -H 'X-User-Id: humo-despliegue' -H 'X-User-Acls: soporte' \
+      -H \"Authorization: Bearer \$(grep ^CHATRAG_SERVICE_BEARER_TOKEN $REPO_DIR/deploy/.env.chatrag-spark | cut -d= -f2)\" \
+      -d '{\"question\": \"¿Cómo reseteo el iDRAC9 a valores de fábrica?\"}'" \
+    | python3 -c 'import sys,json; d=json.load(sys.stdin); assert not d["abstained"] and d["citations"], d; print("  citas:", [c["title"] for c in d["citations"]])' \
+    && ok "consulta RAG real con citas" || fallo "la consulta de humo no devolvió una respuesta citada"
   azul "SIGUIENTE (manual)"
   cat <<FIN
   1. Si necesitas alcance real desde tu Mac (no solo SSH), fija
@@ -162,8 +219,7 @@ if corre 7; then
      y abre http://localhost:3000 en tu Mac sin exponer nada en la tailnet).
   3. /admin (CHATRAG_ADMIN_TOKEN de deploy/.env.chatrag-spark) para reindexar, ver el tema,
      conversaciones y métricas de consumo del RAG.
-  4. Sin CHATRAG_DEV_IDENTITY_BYPASS ni tribu-auth real, /query devuelve 401 a cualquier
-     visitante real — decide con Javier si este despliegue necesita el bypass de dev o espera
-     a un proveedor SSO real (ver CLAUDE.md).
+  4. Login con tribu-auth; con CHATRAG_AUTH_DEMO_SEED=1 hay cuentas demo (ver src/lib/seed-demo.ts).
+  5. La voz (micrófono) solo funciona en https o en localhost: usa el túnel SSH del punto 2.
 FIN
 fi

@@ -17,7 +17,8 @@ class FakeRetriever:
 
 class FakeGenerator:
     async def generate(self, question: str, citations: Sequence[Citation]) -> str:
-        return "resumen de prueba"
+        # Cita todo lo que recibe: lo que se prueba aquí es la traza, no `select_cited`.
+        return "resumen de prueba" + "".join(f" [{i}]" for i in range(1, len(citations) + 1))
 
 
 class SpyAuditLog:

@@ -33,19 +33,18 @@ export const VOICE_STOCK_CATALOG: { id: string; label: string }[] = [
 export const DEFAULT_THEME: Theme = {
   app_name: "ChatRAG",
   logo_url: null,
-  color_accent: "#3b82f6",
-  color_accent_secondary: "#d52b1e",
+  color_accent: "#14b8a6",
+  color_accent_secondary: "#f59e0b",
   color_background: "#050505",
   font_family: "system-ui, -apple-system, sans-serif",
   density: "comfortable",
   bubble_style: "rounded",
-  eyebrow_text: "Ilustre Municipalidad de Santiago",
-  heading_text: "Asistente de la comuna de Santiago",
+  eyebrow_text: "Ventisca TI · empresa ficticia de demo",
+  heading_text: "Asistente de soporte PowerEdge",
   description_text:
-    "Asistente oficial de la comuna de Santiago de Chile. Consúltame sobre trámites y " +
-    "servicios municipales, direcciones del municipio, el alcalde Mario Desbordes o " +
-    "cualquier información del sitio munistgo.cl. Escribe tu pregunta y te respondo con " +
-    "el enlace directo del trámite y su fuente.",
+    "Soporte técnico para servidores Dell PowerEdge: iDRAC, RAID PERC, firmware, " +
+    "diagnóstico y garantía. Escribe tu consulta y te respondo citando la fuente — " +
+    "documentación pública de Dell o la base de conocimiento de Ventisca TI.",
   voice_id: "es-419.Female-1",
 };
 

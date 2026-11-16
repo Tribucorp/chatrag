@@ -220,7 +220,7 @@ def test_conversations_devuelve_lo_registrado_en_query(tmp_path):
 
     class _EchoGenerator:
         async def generate(self, question, citations):
-            return "respuesta de prueba"
+            return "respuesta de prueba [1]"
 
     settings = Settings(
         app_name="ChatRAG-test",
@@ -244,7 +244,7 @@ def test_conversations_devuelve_lo_registrado_en_query(tmp_path):
     entries = conv_resp.json()
     assert len(entries) == 1
     assert entries[0]["question"] == "¿horario?"
-    assert entries[0]["answer"] == "respuesta de prueba"
+    assert entries[0]["answer"] == "respuesta de prueba [1]"
     assert entries[0]["abstained"] is False
     assert entries[0]["citations_shown"] == ["doc://p"]
 

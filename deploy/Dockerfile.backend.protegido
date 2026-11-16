@@ -1,0 +1,145 @@
+# chatrag-api — imagen PROTEGIDA para distribuir a terceros (marketplace / SparkHub): sin
+# código fuente legible. Adapta deploy/x9-node/Dockerfile del SDK (EMPAQUE_PROTEGIDO.md), la
+# receta ya probada en un nodo de partner:
+#   - Wolfi (`wolfi-base` + `python-3.11`) en builder Y final: misma ruta de intérprete (el venv
+#     no queda con un symlink roto), misma glibc y ABI cp311 para los .so; ~0 CVEs de sistema.
+#   - Nuitka `--module` sobre NUESTRO código puro (chatrag_api) y los tribu_* puros → .so; se
+#     borran los .py. Las libs de terceros van como wheels normales (no son IP nuestra).
+#   - tribu_audit / tribu_crypto ya son .so de Rust (wheels de deploy/wheels, fase 2 de
+#     despliegue_spark.sh); conservan su __init__.py, que solo reexporta la API del .so.
+#   - tribu_licensing también trae núcleo Rust, pero su capa Python (sobre, huella) SÍ tiene
+#     lógica: se compila con Nuitka como los puros y se conserva solo su .so de Rust interno.
+#   - Puerta de licencia por host (chatrag_api/licencia.py) HORNEADA: obligatoria, con las
+#     claves públicas de confianza del build-arg CHATRAG_LICENSE_KEYS, compiladas dentro del
+#     .so de chatrag_api. El entorno del tercero no puede apagarla ni cambiar las claves.
+#   - Puertas de build: si algo no compila, no importa o queda un .py/.pyc nuestro, la build
+#     FALLA (nada de `|| true`).
+#
+# Límites (los mismos que declara el SDK): quien tenga root en el host puede desensamblar los
+# .so o leer cadenas (p. ej. el prompt de sistema) — sube mucho el coste de copiar, no lo
+# impide. La barrera de "solo corre donde está licenciado" es la licencia por host (arriba).
+#
+# Build (desde la raíz del repo, en una máquina arm64 o con buildx). La clave pública sale de
+# `deploy/emitir_licencia.py claves`; sin ella la build falla (no hay imagen protegida sin puerta):
+#   docker build -f deploy/Dockerfile.backend.protegido \
+#     --build-arg CHATRAG_LICENSE_KEYS=chatrag-2026:<hex de 32 bytes> -t chatrag-api:protegido .
+# Correr (montajes de la huella de solo lectura + el sobre emitido para ESTE host):
+#   -v /etc/machine-id:/host/etc/machine-id:ro -v /sys:/host/sys:ro
+#   -v ./license.json:/run/chatrag/license.json:ro
+
+FROM cgr.dev/chainguard/wolfi-base AS builder
+RUN apk add --no-cache python-3.11 python-3.11-dev build-base patchelf ca-certificates
+COPY --from=ghcr.io/astral-sh/uv:0.11.6 /uv /usr/local/bin/uv
+
+ENV UV_PYTHON=/usr/bin/python3.11 UV_PYTHON_PREFERENCE=only-system UV_NO_CACHE=1
+WORKDIR /build
+# El fuente solo entra en el builder; la etapa final copia el venv ya compilado.
+COPY backend/pyproject.toml backend/uv.lock ./
+COPY backend/src ./src
+COPY deploy/wheels ./wheels
+
+# 0) Horneado de la puerta de licencia: sobreescribe el _licencia_horneada.py del repo (puerta
+#    apagada) ANTES de instalar y compilar, así acaba dentro del .so de chatrag_api.
+ARG CHATRAG_LICENSE_KEYS
+RUN CHATRAG_LICENSE_KEYS="$CHATRAG_LICENSE_KEYS" /usr/bin/python3.11 -c "\
+import os, re; raw = os.environ.get('CHATRAG_LICENSE_KEYS', ''); \
+keys = dict(item.strip().split(':', 1) for item in raw.split(',') if item.strip()); \
+assert keys, 'falta --build-arg CHATRAG_LICENSE_KEYS=key_id:<hex>: no hay imagen protegida sin licencia'; \
+assert all(k and re.fullmatch('[0-9a-f]{64}', v) for k, v in keys.items()), 'CHATRAG_LICENSE_KEYS mal formado'; \
+open('src/chatrag_api/_licencia_horneada.py', 'w').write( \
+  '# Generado por Dockerfile.backend.protegido\n' \
+  'ENFORCED = True\n' f'TRUSTED_KEYS_HEX = {keys!r}\n' \
+  \"STATE_FILE = '/data/licencia-reloj.json'\n\"); \
+print('puerta de licencia horneada con', sorted(keys))"
+
+# 1) Terceros fijados EXACTAMENTE a uv.lock (lo que pasa los tests en CI), sin los tribu-*
+#    (dependencias git: no hay credenciales aquí; vienen de ./wheels, construidos desde la
+#    MISMA tag del SDK que fija el lock).
+RUN set -eux; \
+    uv export --frozen --no-dev --no-hashes --no-emit-project \
+      --no-emit-package tribu-http --no-emit-package tribu-rag --no-emit-package tribu-audit \
+      --no-emit-package tribu-crypto --no-emit-package tribu-guardrails \
+      --no-emit-package tribu-voice --no-emit-package tribu-licensing > terceros.txt; \
+    uv venv /opt/venv; \
+    uv pip install --python /opt/venv/bin/python -r terceros.txt; \
+    uv pip install --python /opt/venv/bin/python --no-deps ./wheels/*.whl; \
+    uv pip install --python /opt/venv/bin/python --no-deps .
+
+# 2) Nuitka --module: cada paquete puro nuestro → un .so; se borra su fuente.
+RUN uv pip install --python /opt/venv/bin/python nuitka==2.4.8
+RUN set -eux; SP=$(/opt/venv/bin/python -c "import site; print(site.getsitepackages()[0])"); \
+    for pkg in chatrag_api tribu_http tribu_rag tribu_guardrails tribu_voice; do \
+      /opt/venv/bin/python -m nuitka --module "$SP/$pkg" \
+        --include-package="$pkg" --output-dir=/opt/compiled --remove-output; \
+      rm -rf "$SP/$pkg"; \
+      cp -r /opt/compiled/"$pkg".* "$SP/"; \
+      ls "$SP/$pkg".*.so; \
+    done; \
+    # tribu_licensing: el paquete compilado se carga desde $SP/tribu_licensing.*.so y su
+    # __path__ sigue apuntando al directorio, donde se deja SOLO el .so de Rust
+    # (tribu_licensing/tribu_licensing.abi3.so) que importa `from .tribu_licensing import`.
+    /opt/venv/bin/python -m nuitka --module "$SP/tribu_licensing" \
+      --include-package=tribu_licensing --nofollow-import-to=tribu_licensing.tribu_licensing \
+      --output-dir=/opt/compiled --remove-output; \
+    find "$SP/tribu_licensing" -mindepth 1 -not -name "tribu_licensing.abi3.so" -exec rm -rf {} +; \
+    cp /opt/compiled/tribu_licensing.*.so "$SP/"; \
+    ls "$SP"/tribu_licensing.*.so "$SP/tribu_licensing/tribu_licensing.abi3.so"; \
+    uv pip uninstall --python /opt/venv/bin/python nuitka
+
+# 3) Purga de fuente residual (defensa en profundidad). tribu_crypto/tribu_audit son híbridos:
+#    su __init__.py solo reexporta la API del .so de Rust y se conserva (sin él no hay API).
+RUN set -eux; SP=$(/opt/venv/bin/python -c "import site; print(site.getsitepackages()[0])"); \
+    find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "*.py" \
+      -not -path "*/tribu_crypto/*" -not -path "*/tribu_audit/*" -delete; \
+    # Stubs .pyi (Nuitka los genera listando los imports de cada .so; en runtime no se usan) y
+    # basura AppleDouble `._*` de macOS que pueda venir dentro de los wheels.
+    find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "*.pyi" -delete; \
+    find "$SP" -name "._*" -delete; \
+    rm -rf "$SP"/chatrag_api-*.dist-info/RECORD "$SP"/__editable__* "$SP"/_chatrag_api*.pth
+
+# 4) PUERTAS: lo compilado importa (incluida la fábrica de la app y los submódulos que
+#    uvicorn/FastAPI resuelven por nombre) y la API Rust híbrida sigue intacta.
+RUN /opt/venv/bin/python -c "\
+import importlib; \
+[importlib.import_module(m) for m in ('chatrag_api.app','chatrag_api.rag','chatrag_api.ingest','chatrag_api.voice','chatrag_api.licencia','tribu_http.client','tribu_rag.milvus_store','tribu_guardrails.tool_poisoning','tribu_voice')]; \
+import tribu_licensing as tl; assert all(hasattr(tl, a) for a in ('verify_envelope', 'collect_host_component_hashes', 'check_clock_rollback')), 'tribu_licensing sin API'; \
+from chatrag_api import _licencia_horneada as h; assert h.ENFORCED and h.TRUSTED_KEYS_HEX and h.STATE_FILE, 'puerta no horneada'; \
+from chatrag_api.app import create_app; \
+app = create_app(); schema = app.openapi(); \
+assert {'/health', '/query', '/admin/licencia'} <= set(schema['paths']), sorted(schema['paths']); \
+gate = app.state.license_gate; assert gate.enforced and gate.horneada and gate.estado() == 'inerte', gate.resumen(); \
+import tribu_crypto, tribu_audit; assert hasattr(tribu_audit, 'AuditChain'); \
+assert all(hasattr(tribu_crypto, a) for a in ('sign', 'verify')), 'tribu_crypto sin API'; \
+print('OK: chatrag-api compilado importa')"
+# 5) Sin bytecode ni fuente nuestros en lo que se copia a la final.
+RUN set -eux; SP=$(/opt/venv/bin/python -c "import site; print(site.getsitepackages()[0])"); \
+    find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "__pycache__" -type d -prune -exec rm -rf {} +; \
+    ! find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "*.pyc" | grep -q .; \
+    ! find "$SP" -path "*/chatrag_api*" -name "*.py" | grep -q .; \
+    ! find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "*.pyi" | grep -q .; \
+    ! find "$SP" -name "._*" | grep -q .; \
+    test "$(find "$SP" -path "*/tribu_*" -name "*.py" | sort | tr '\n' ' ')" = \
+      "$SP/tribu_audit/__init__.py $SP/tribu_crypto/__init__.py "; \
+    test "$(ls -A "$SP/tribu_licensing")" = "tribu_licensing.abi3.so"
+
+FROM cgr.dev/chainguard/wolfi-base AS final
+RUN apk add --no-cache python-3.11 && rm -rf /var/cache/apk/*
+# Runtime del toolchain que piden los .so (Rust/PyO3: libgcc_s; Nuitka: libstdc++).
+COPY --from=builder /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+COPY --from=builder /usr/lib/libstdc++.so.6* /usr/lib/
+COPY --from=builder /opt/venv /opt/venv
+# Corpus de arranque (contenido, no código) para el init-container seed-knowledge.
+COPY knowledge /seed-knowledge
+# Directorios de los volúmenes con nombre, ya del usuario sin privilegios: Docker inicializa un
+# volumen nuevo con el propietario del directorio de la imagen, así que el proceso nonroot
+# puede escribir el tema (/data) y los documentos subidos (/knowledge) sin un chown aparte.
+RUN mkdir -p /knowledge /data && chown 65532:65532 /knowledge /data
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONPATH=/opt/venv/lib/python3.11/site-packages \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    CHATRAG_LICENSE_FILE=/run/chatrag/license.json \
+    CHATRAG_LICENSE_HOST_ROOT=/host
+USER 65532:65532
+EXPOSE 8080
+CMD ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

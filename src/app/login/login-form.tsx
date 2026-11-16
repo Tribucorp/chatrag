@@ -10,7 +10,11 @@ import { useTheme } from "@/lib/theme-context";
 const INPUT_CLASS =
   "rounded-[var(--chatrag-radius)] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-white/25";
 
-export function LoginForm({ demoPassword }: { demoPassword: string | null }) {
+export function LoginForm({
+  demo,
+}: {
+  demo: { accounts: readonly string[]; password: string } | null;
+}) {
   const router = useRouter();
   const theme = useTheme();
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
@@ -117,10 +121,10 @@ export function LoginForm({ demoPassword }: { demoPassword: string | null }) {
         </button>
       </form>
 
-      {demoPassword && (
+      {demo && (
         <p className="mt-6 max-w-sm text-center text-[11px] text-white/35">
-          Demo: admin@munistgo.cl / rrhh@munistgo.cl / finanzas@munistgo.cl / vecino@munistgo.cl
-          — contraseña <code className="text-white/50">{demoPassword}</code>
+          Demo: {demo.accounts.join(" / ")} — contraseña{" "}
+          <code className="text-white/50">{demo.password}</code>
         </p>
       )}
     </main>

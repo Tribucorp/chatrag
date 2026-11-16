@@ -1,0 +1,17 @@
+# Contexto de build de deploy/Dockerfile.{backend,frontend} (= raíz del repo). Sobre todo: que
+# ningún .env con secretos locales entre en una imagen (`COPY . .` del frontend, y `next build`
+# carga .env* del directorio).
+.env
+.env*.local
+deploy/.env.chatrag-spark
+.mcp*.json
+.git
+.claude
+node_modules
+.next
+.npm-cache
+backend/.venv
+**/__pycache__
+**/.mypy_cache
+legacy
+_producto

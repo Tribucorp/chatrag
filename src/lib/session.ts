@@ -1,16 +1,22 @@
 import "server-only";
 
 import { auth } from "./auth";
-import { rolesToAcls } from "./acl";
+import { isAdminRole, rolesToAcls } from "./acl";
 import { DEMO_ORG_SLUG } from "./seed-demo";
 
-export type SessionIdentity = { userId: string; email: string; acls: string[] };
+export type SessionIdentity = {
+  userId: string;
+  email: string;
+  role: string | null;
+  acls: string[];
+  isAdmin: boolean;
+};
 
 /**
  * Identidad real de la petición para el BFF: sesión de tribu-auth + rol del usuario en la
  * organización de ChatRAG, traducido a ACLs. `null` sin sesión — quien llama responde 401.
  *
- * No ser miembro de la organización (un vecino recién registrado) no es un error: no tiene
+ * No ser miembro de la organización (un cliente recién registrado) no es un error: no tiene
  * ACLs extra y solo verá citas públicas, igual que el backend trata cualquier ACL desconocida.
  */
 export async function getSessionIdentity(headers: Headers): Promise<SessionIdentity | null> {
@@ -24,7 +30,13 @@ export async function getSessionIdentity(headers: Headers): Promise<SessionIdent
   } catch {
     role = null;
   }
-  return { userId: session.user.id, email: session.user.email, acls: rolesToAcls(role) };
+  return {
+    userId: session.user.id,
+    email: session.user.email,
+    role,
+    acls: rolesToAcls(role),
+    isAdmin: isAdminRole(role),
+  };
 }
 
 /** Cabeceras hacia chatrag-api: bearer de servicio (si está configurado) + identidad. */

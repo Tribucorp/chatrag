@@ -1,0 +1,33 @@
+# Override para correr la imagen PROTEGIDA (deploy/Dockerfile.backend.protegido) en el host de un
+# tercero: la puerta de licencia (backend/src/chatrag_api/licencia.py) va horneada en esa imagen
+# y necesita leer la huella del host y el sobre emitido para ÉL. Se superpone a cualquiera de
+# los dos perfiles:
+#
+#   CHATRAG_API_IMAGE=chatrag-api:protegido CHATRAG_LICENSE_PATH=/etc/chatrag/license.json \
+#     docker compose -f docker-compose.chatrag-spark.yml -f docker-compose.licencia.yml up -d
+#
+# Sin licencia válida el servicio NO se cae: arranca en modo inerte (503 salvo /health, /theme y
+# /admin/licencia). Para pedir la licencia, `GET /admin/licencia` devuelve la solicitud de
+# huella, o: docker compose ... run --rm chatrag-api chatrag-licencia huella
+#
+# Los despliegues propios (imagen normal) NO usan este override: no necesitan /sys del host.
+#
+# Migrar un host que ya corría la imagen NORMAL: sus volúmenes chatrag-data/chatrag-knowledge
+# son de root, y la protegida corre como 65532 — sin escribir /data no persiste el reloj de la
+# licencia y queda inerte (estado_no_persistible). Una vez, antes del `up`:
+#   docker run --rm -v chatrag_chatrag-data:/d -v chatrag_chatrag-knowledge:/k \
+#     --entrypoint chown chatrag-api:latest -R 65532:65532 /d /k
+# Volver a la imagen normal no requiere deshacerlo (corre como root).
+# No pongas CHATRAG_API_IMAGE=…:protegido en el .env de despliegue_spark.sh: su fase de build
+# construye con deploy/Dockerfile.backend y pisaría esa etiqueta con la imagen normal.
+
+services:
+  chatrag-api:
+    volumes:
+      # Huella del host (tribu-host-component/v1): machine-id, seriales NVMe, MAC físicas y
+      # serial DMI, de solo lectura. /sys entero y no solo /sys/class: las entradas de
+      # /sys/class/net son enlaces a ../../devices/... y deben resolverse dentro de /host.
+      - /etc/machine-id:/host/etc/machine-id:ro
+      - /sys:/host/sys:ro
+      # El sobre emitido para este host (deploy/emitir_licencia.py emitir).
+      - ${CHATRAG_LICENSE_PATH:?falta CHATRAG_LICENSE_PATH — ruta del license.json en el host}:/run/chatrag/license.json:ro

@@ -12,17 +12,30 @@ temporal de revisión, es una restricción estructural del propio `tribu_voice`�
 **stock** del catálogo (`StockVoice`, nunca un campo de voz de referencia) y ninguna entrada de
 audio del usuario usada para inferir su estado emocional.
 
-Contrato de red **sin verificar contra un NIM Riva real** (no hay ninguna imagen NIM de Riva
-pineada en ningún sitio del SDK, ver CLAUDE.md) — `RivaVoiceSynthesizer`/`RivaAsrClient` asumen
-el mismo patrón `/v1/...` OpenAI-compatible que el resto de NIMs de este proyecto (chat, embed,
-rerank), por consistencia con esa convención, NO porque esté confirmado en documentación real de
-Riva. Confirmar contra el NIM real antes de desplegar (mismo criterio que
-`nim_rerank_model_id` en `config.py`: convención razonable, no un hecho verificado)."""
+Contrato de red con los NIM de Riva (Speech NIM), tomado del único despliegue real en GB10 del
+ecosistema (X9Voz, `backend/src/x9voz_backend/voz.py`, en producción en spark-69f8) y de la guía
+oficial de Speech NIM — NO la forma OpenAI que se suponía antes (`/v1/audio/speech` + JSON, que el
+NIM real no sirve):
+
+- TTS — Magpie TTS Multilingual (`nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0`):
+  `POST /v1/audio/synthesize`, multipart `text`/`language`/`voice`/`sample_rate_hz` → WAV PCM16
+  mono. Solo español de América (`es-US`). El texto se limpia de markdown y se parte en trozos
+  de ≤300 caracteres (el NIM tarda más cuanto más largo es), y el PCM se concatena en un WAV.
+- ASR — Parakeet 1.1b RNNT Multilingual (Riva ASR NIM): `POST /v1/audio/transcriptions`,
+  multipart `file` (WAV PCM16 16 kHz mono, lo convierte el navegador) + `language` → `{"text"}`.
+
+`tribu_voice` define voces stock con ids abstractos (`es-419.Female-1`…); `MAGPIE_VOICES` es la
+correspondencia explícita con las voces stock reales de Magpie. Un id sin correspondencia falla
+cerrado (`VoiceConfigError`), nunca cae en una voz por defecto. Emoción SSML: el `synthesize` de
+Magpie no la recibe; se acepta solo `neutral`."""
 
 from __future__ import annotations
 
+import io
+import re
 import time
 import uuid
+import wave
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -33,6 +46,78 @@ if TYPE_CHECKING:
 from pydantic import BaseModel, ConfigDict
 
 from chatrag_api.theme import Theme
+
+# Voces stock de tribu_voice → voces stock reales del NIM Magpie (Speech NIM 26.07, solo es-US;
+# lista de X9Voz). Magpie no tiene es-ES: esos ids suenan con una voz es-US. Sin entrada → error.
+MAGPIE_VOICES: dict[str, str] = {
+    "es-419.Female-1": "Magpie-Multilingual.ES-US.Isabela",
+    "es-ES.Female-1": "Magpie-Multilingual.ES-US.Sofia",
+    "es-ES.Male-1": "Magpie-Multilingual.ES-US.Diego",
+}
+TTS_LANGUAGE = "es-US"
+TTS_SAMPLE_RATE_HZ = 22_050
+ASR_LANGUAGE = "es-US"
+MAX_TTS_CHUNK_CHARS = 300
+
+_MARKDOWN = re.compile(r"[*_`#>|]+")
+_URL = re.compile(r"https?://\S+")
+_SENTENCE_END = re.compile(r"(?<=[.!?…:;])\s+|\n+")
+
+
+class VoiceBackendError(RuntimeError):
+    """El NIM de TTS/ASR falló o devolvió algo inesperado."""
+
+
+def text_for_speech(text: str) -> list[str]:
+    """Texto listo para el TTS: sin markdown ni URLs (no se leen en voz alta), en trozos de
+    ≤`MAX_TTS_CHUNK_CHARS` cortados en fin de frase, o en espacio si una frase es más larga."""
+
+    clean = _URL.sub("", _MARKDOWN.sub("", text))
+    chunks: list[str] = []
+    current = ""
+    for sentence in (s.strip() for s in _SENTENCE_END.split(clean)):
+        if not sentence:
+            continue
+        while len(sentence) > MAX_TTS_CHUNK_CHARS:
+            cut = sentence.rfind(" ", 0, MAX_TTS_CHUNK_CHARS)
+            cut = cut if cut > 0 else MAX_TTS_CHUNK_CHARS
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(sentence[:cut].strip())
+            sentence = sentence[cut:].strip()
+        if current and len(current) + 1 + len(sentence) > MAX_TTS_CHUNK_CHARS:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = f"{current} {sentence}".strip()
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def pcm_from_wav(data: bytes) -> bytes:
+    """PCM de la respuesta WAV del NIM; exige 16-bit mono a `TTS_SAMPLE_RATE_HZ`."""
+
+    try:
+        with wave.open(io.BytesIO(data)) as wav:
+            fmt = (wav.getsampwidth(), wav.getnchannels(), wav.getframerate())
+            if fmt != (2, 1, TTS_SAMPLE_RATE_HZ):
+                raise VoiceBackendError(f"WAV inesperado del NIM de TTS: {fmt}")
+            frames: bytes = wav.readframes(wav.getnframes())
+            return frames
+    except (wave.Error, EOFError) as exc:
+        raise VoiceBackendError(f"el NIM de TTS no devolvió un WAV válido: {exc}") from exc
+
+
+def wav_from_pcm(pcm: bytes) -> bytes:
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(TTS_SAMPLE_RATE_HZ)
+        wav.writeframes(pcm)
+    return buf.getvalue()
 
 
 class VoiceDisabledError(RuntimeError):
@@ -224,36 +309,51 @@ class TribuVoiceService:  # pragma: no cover - requiere el NIM Riva real
         # Se re-deriva del tema actual (no del que había al mintear la sesión): si el admin
         # cambió la voz entre `mint_session` y `speak`, usa la vigente — el token solo
         # garantiza que la sesión es válida (alcance/caducidad), no fija qué voz sonará.
+        if emotion != "neutral":
+            # El `synthesize` de Magpie no recibe estilo emocional: no se finge que se aplica.
+            raise VoiceConfigError(f"emoción {emotion!r} no soportada por el NIM de TTS")
         face = await self._build_face_from_theme()
         request = SpeechRequest(text=text, brand=face.brand, emotion=SsmlEmotion(emotion))
+        magpie_voice = MAGPIE_VOICES.get(request.brand.voice_id)
+        if magpie_voice is None:
+            raise VoiceConfigError(
+                f"la voz stock {request.brand.voice_id!r} no tiene voz Magpie equivalente "
+                f"({sorted(MAGPIE_VOICES)}) — elige otra desde /admin/theme"
+            )
 
         http = self._ensure_http()
-        # Contrato sin verificar (ver docstring del módulo): asume forma OpenAI-compatible
-        # como el resto de NIMs de este proyecto, no confirmado contra un NIM Riva TTS real.
-        response = await http.post(
-            f"{self._nim_tts_url}/v1/audio/speech",
-            json={
-                "input": request.text,
-                "voice": request.brand.voice_id,
-                "response_format": "wav",
-            },
-        )
-        response.raise_for_status()
-        return response.content
+        pcm = bytearray()
+        for chunk in text_for_speech(request.text):
+            response = await http.post(
+                f"{self._nim_tts_url}/v1/audio/synthesize",
+                files={
+                    "text": (None, chunk),
+                    "language": (None, TTS_LANGUAGE),
+                    "voice": (None, magpie_voice),
+                    "sample_rate_hz": (None, str(TTS_SAMPLE_RATE_HZ)),
+                },
+            )
+            if response.status_code != 200:
+                raise VoiceBackendError(
+                    f"NIM de TTS: HTTP {response.status_code} {response.text[:200]}"
+                )
+            pcm += pcm_from_wav(response.content)
+        return wav_from_pcm(bytes(pcm))
 
     async def transcribe(self, *, token_id: str, audio: bytes, content_type: str) -> str:
         from tribu_voice import TokenScope
 
         self._check(token_id, required_scope=TokenScope.SPEAK)
         http = self._ensure_http()
-        # Contrato sin verificar (ver docstring del módulo): mismo shape que la API de
-        # transcripción de OpenAI (multipart, campo "file"), convención habitual en NIMs de
-        # ASR — no confirmado contra un NIM Riva ASR real.
         response = await http.post(
             f"{self._nim_asr_url}/v1/audio/transcriptions",
-            files={"file": ("audio", audio, content_type)},
+            files={"file": ("audio.wav", audio, content_type)},
+            data={"language": ASR_LANGUAGE},
         )
-        response.raise_for_status()
+        if response.status_code != 200:
+            raise VoiceBackendError(
+                f"NIM de ASR: HTTP {response.status_code} {response.text[:200]}"
+            )
         data = response.json()
         text: str = data["text"]
         return text

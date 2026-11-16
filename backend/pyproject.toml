@@ -18,6 +18,9 @@ dependencies = [
     "tribu-crypto",
     "tribu-guardrails",
     "tribu-voice",
+    # Licencia por host de la imagen que se entrega a terceros (licencia.py): sobre Ed25519 +
+    # huella del host, verificados en la crate Rust. Núcleo Rust, como audit/crypto.
+    "tribu-licensing",
     # --- PyPI normal, no del registry privado ---
     # Respalda tribu_audit.AuditChain en Postgres (ver audit.py) -- opt-in, solo se usa si
     # CHATRAG_AUDIT_DATABASE_URL/CHATRAG_AUDIT_CHAIN_KEY estan configuradas.
@@ -29,6 +32,11 @@ dependencies = [
     "pymilvus>=2.5",
 ]
 
+[project.scripts]
+# `chatrag-licencia huella|estado` (ver licencia.py). Entry point y no `python -m`: en la imagen
+# protegida chatrag_api es un .so de Nuitka y runpy no puede ejecutarlo como __main__.
+chatrag-licencia = "chatrag_api.licencia:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -36,6 +44,9 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "httpx>=0.27",
+    # Solo para GENERAR claves Ed25519 en los tests de licencia.py y en deploy/emitir_licencia.py
+    # (lado emisor); firmar y verificar pasa siempre por tribu_licensing (Rust).
+    "cryptography>=43",
 ]
 
 # El SDK es privado de la organizacion: en local basta `gh auth setup-git`; en CI, un PAT de solo
@@ -48,6 +59,7 @@ tribu-audit = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", 
 tribu-crypto = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-crypto" }
 tribu-guardrails = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-guardrails" }
 tribu-voice = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-voice" }
+tribu-licensing = { git = "https://github.com/Tribucorp/tribu-sdk", tag = "v1.0.0", subdirectory = "python/tribu-licensing" }
 
 [build-system]
 requires = ["hatchling"]

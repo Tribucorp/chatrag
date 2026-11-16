@@ -5,6 +5,9 @@ import { useRouter } from "next/navigation";
 import { Send, Loader2, ShieldCheck, Mic, MicOff, Square, LogOut } from "lucide-react";
 
 import { signOut } from "@/lib/auth-client";
+import { stripCiteMarkers } from "@/lib/citations";
+import { isSafeHref, Markdown } from "@/lib/markdown";
+import { blobToWav16kMono } from "@/lib/wav";
 
 // Reemplaza al antiguo VoiceAgent acoplado a ElevenLabs (proveedor cloud, incompatible con la
 // constitución on-prem del Tribu SDK). Consulta al BFF (`/api/chat`, ver
@@ -27,6 +30,11 @@ type Turn = { role: "user" | "assistant"; content: string; citations?: Citation[
 type VoiceSession = { token_id: string; face_id: string; expires_at: number };
 
 const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
+// Lista de fuentes bajo cada respuesta: visible por defecto (regla "citas o abstención").
+// El backend solo devuelve las que la respuesta cita, numeradas como las marcas `[n]` del
+// texto. NEXT_PUBLIC_SHOW_CITATIONS=0 oculta lista y marcas solo en la UI — el backend sigue
+// devolviendo y auditando las citas igual.
+const SHOW_CITATIONS = process.env.NEXT_PUBLIC_SHOW_CITATIONS !== "0";
 
 export function ChatAgent() {
   const router = useRouter();
@@ -86,13 +94,19 @@ export function ChatAgent() {
           router.push("/login");
           return;
         }
+        if (resp.status === 503) {
+          // Modo inerte de la puerta de licencia (backend licencia.py): su `detail` explica al
+          // usuario qué pasa, mejor que un código HTTP.
+          const body = await resp.json().catch(() => null);
+          if (body?.licencia && typeof body.detail === "string") throw new Error(body.detail);
+        }
         if (!resp.ok) throw new Error(`El backend respondió ${resp.status}`);
         const answer: Answer = await resp.json();
         setTurns((t) => [
           ...t,
           { role: "assistant", content: answer.text, citations: answer.citations },
         ]);
-        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, answer.text);
+        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, stripCiteMarkers(answer.text));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Error consultando el asistente");
       } finally {
@@ -135,7 +149,10 @@ export function ChatAgent() {
       () => {
         void (async () => {
           try {
-            const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+            // El NIM de ASR de Riva espera WAV PCM16 16 kHz mono, no el webm de MediaRecorder.
+            const blob = await blobToWav16kMono(
+              new Blob(chunksRef.current, { type: recorder.mimeType })
+            );
             const sessionResp = await fetch("/api/voice/session", { method: "POST" });
             if (!sessionResp.ok) throw new Error("no se pudo abrir sesión de voz");
             const voiceToken: VoiceSession = await sessionResp.json();
@@ -186,7 +203,7 @@ export function ChatAgent() {
       >
         {turns.length === 0 ? (
           <p className="py-16 text-center text-sm text-white/40">
-            Escribe tu consulta sobre trámites y servicios municipales.
+            Escribe tu consulta sobre tu servidor PowerEdge.
           </p>
         ) : (
           <ul className="flex flex-col" style={{ gap: "var(--chatrag-gap)" }}>
@@ -196,7 +213,7 @@ export function ChatAgent() {
                   className={
                     turn.role === "user"
                       ? "inline-block rounded-[var(--chatrag-radius)] px-4 py-2 text-sm"
-                      : "inline-block rounded-[var(--chatrag-radius)] bg-white/[0.06] px-4 py-2 text-sm"
+                      : "inline-block max-w-full rounded-[var(--chatrag-radius)] bg-white/[0.06] px-4 py-2 text-left text-sm"
                   }
                   style={
                     turn.role === "user"
@@ -207,20 +224,32 @@ export function ChatAgent() {
                       : undefined
                   }
                 >
-                  {turn.content}
+                  {turn.role === "assistant" ? (
+                    <Markdown
+                      text={SHOW_CITATIONS ? turn.content : stripCiteMarkers(turn.content)}
+                    />
+                  ) : (
+                    turn.content
+                  )}
                 </div>
-                {turn.citations && turn.citations.length > 0 && (
+                {SHOW_CITATIONS && turn.citations && turn.citations.length > 0 && (
                   <ul className="mt-2 flex flex-col gap-1 text-left">
                     {turn.citations.map((c, j) => (
                       <li key={j} className="text-[11px] text-white/45">
-                        <a
-                          href={c.source_uri}
-                          className="underline decoration-white/20 hover:text-white/70"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {c.title || c.source_uri}
-                        </a>
+                        <span className="mr-1 tabular-nums text-white/60">[{j + 1}]</span>
+                        {isSafeHref(c.source_uri) ? (
+                          <a
+                            href={c.source_uri}
+                            className="underline decoration-white/20 hover:text-white/70"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {c.title || c.source_uri}
+                          </a>
+                        ) : (
+                          // Base de conocimiento propia (kb://): se cita, pero no hay URL pública.
+                          <span title={c.source_uri}>{c.title || c.source_uri} · base interna</span>
+                        )}
                       </li>
                     ))}
                   </ul>

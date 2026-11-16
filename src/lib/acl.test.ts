@@ -1,31 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { rolesToAcls } from "./acl";
+import { isAdminRole, rolesToAcls } from "./acl";
 
 describe("rolesToAcls", () => {
-  it("el rol member (default) no da ninguna ACL extra", () => {
-    expect(rolesToAcls("member")).toEqual([]);
+  it("el cliente no tiene ACL extra (solo lo público)", () => {
+    expect(rolesToAcls("cliente")).toEqual([]);
   });
 
-  it("mapea rrhhStaff/finanzasStaff a su ACL correspondiente", () => {
-    expect(rolesToAcls("rrhhStaff")).toEqual(["rrhh"]);
-    expect(rolesToAcls("finanzasStaff")).toEqual(["finanzas"]);
+  it("técnico y comercial ven su área interna", () => {
+    expect(rolesToAcls("tecnico")).toEqual(["soporte"]);
+    expect(rolesToAcls("comercial")).toEqual(["comercial"]);
   });
 
-  it("municipalAdmin ve todas las ACLs del demo", () => {
-    expect(rolesToAcls("municipalAdmin")).toEqual(["rrhh", "finanzas"]);
+  it("adminSoporte ve todas las áreas internas", () => {
+    expect(rolesToAcls("adminSoporte")).toEqual(["soporte", "comercial"]);
   });
 
   it("fail-closed: sin rol o rol desconocido, ninguna ACL extra", () => {
     expect(rolesToAcls(null)).toEqual([]);
     expect(rolesToAcls(undefined)).toEqual([]);
     expect(rolesToAcls("rol-que-no-existe")).toEqual([]);
-    // Claves heredadas de Object.prototype no son roles.
     expect(rolesToAcls("toString")).toEqual([]);
     expect(rolesToAcls("__proto__")).toEqual([]);
   });
 
   it("devuelve una copia: mutarla no altera los grants", () => {
-    rolesToAcls("rrhhStaff").push("finanzas");
-    expect(rolesToAcls("rrhhStaff")).toEqual(["rrhh"]);
+    rolesToAcls("tecnico").push("comercial");
+    expect(rolesToAcls("tecnico")).toEqual(["soporte"]);
+  });
+});
+
+describe("isAdminRole", () => {
+  it("solo adminSoporte administra", () => {
+    expect(isAdminRole("adminSoporte")).toBe(true);
+    for (const rol of ["cliente", "tecnico", "comercial", "", null, undefined]) {
+      expect(isAdminRole(rol)).toBe(false);
+    }
   });
 });

@@ -112,12 +112,26 @@ class Settings(BaseModel):
     rate_limit_window_seconds: float = Field(default=60.0, gt=0)
     # Timeout de la llamada completa retriever+generador en /query — evita que una consulta se
     # cuelgue para siempre si un NIM deja de responder. `asyncio.TimeoutError` se traduce a 504.
-    query_timeout_seconds: float = Field(default=30.0, gt=0)
+    query_timeout_seconds: float = Field(default=90.0, gt=0)
+    # Timeout HTTP de la llamada al NIM de chat (generación); debe quedar por debajo del de /query.
+    nim_chat_timeout_seconds: float = Field(default=60.0, gt=0)
 
     # Buffer en memoria de conversaciones recientes (ver conversations.py) — siempre activo,
     # sin configuración, para /admin/conversations y /admin/metrics. Se pierde al reiniciar
     # el proceso a propósito: no es el registro de cumplimiento (eso es tribu-audit, opt-in).
     conversation_log_max_entries: int = Field(default=200, gt=0)
+
+    # Puerta de licencia por host (ver licencia.py). En la imagen protegida la obligatoriedad,
+    # las claves de confianza y el fichero de estado van HORNEADOS (`_licencia_horneada`) y
+    # estos tres campos se ignoran; aquí solo sirven para desarrollo. Apagada por defecto.
+    license_enforced: bool = False
+    # key_id -> clave pública Ed25519 (32 bytes). Entorno: "key_id:hex,key_id2:hex".
+    license_public_keys: dict[str, bytes] = Field(default_factory=dict)
+    license_state_file: str | None = None
+    # Estos dos sí valen también en la imagen protegida: dónde está el sobre y dónde están
+    # montados, de solo lectura, /etc/machine-id y /sys del host.
+    license_file: str | None = None
+    license_host_root: str = "/"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -163,8 +177,35 @@ class Settings(BaseModel):
             rate_limit_window_seconds=float(
                 os.environ.get("CHATRAG_RATE_LIMIT_WINDOW_SECONDS", "60")
             ),
-            query_timeout_seconds=float(os.environ.get("CHATRAG_QUERY_TIMEOUT_SECONDS", "30")),
+            query_timeout_seconds=float(os.environ.get("CHATRAG_QUERY_TIMEOUT_SECONDS", "90")),
+            nim_chat_timeout_seconds=float(
+                os.environ.get("CHATRAG_NIM_CHAT_TIMEOUT_SECONDS", "60")
+            ),
             conversation_log_max_entries=int(
                 os.environ.get("CHATRAG_CONVERSATION_LOG_MAX_ENTRIES", "200")
             ),
+            license_enforced=os.environ.get("CHATRAG_LICENSE_ENFORCEMENT", "0") == "1",
+            license_public_keys=_parse_public_keys(
+                os.environ.get("CHATRAG_LICENSE_PUBLIC_KEYS", "")
+            ),
+            license_state_file=os.environ.get("CHATRAG_LICENSE_STATE_FILE") or None,
+            license_file=os.environ.get("CHATRAG_LICENSE_FILE") or None,
+            license_host_root=os.environ.get("CHATRAG_LICENSE_HOST_ROOT") or "/",
         )
+
+
+def _parse_public_keys(raw: str) -> dict[str, bytes]:
+    """"key_id:hex,key_id2:hex" -> {key_id: 32 bytes}. Falla al arrancar si está mal escrito."""
+
+    keys: dict[str, bytes] = {}
+    for item in (part.strip() for part in raw.split(",")):
+        if not item:
+            continue
+        key_id, sep, hex_key = item.partition(":")
+        key = bytes.fromhex(hex_key.strip()) if sep else b""
+        if not key_id.strip() or len(key) != 32:
+            raise ValueError(
+                "CHATRAG_LICENSE_PUBLIC_KEYS: se espera key_id:<32 bytes en hex>, separados por comas"
+            )
+        keys[key_id.strip()] = key
+    return keys
