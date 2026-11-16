@@ -83,7 +83,8 @@ Tribu SDK** — su feedback define la DX del SDK.
 ## Despliegue
 
 - **MarketplaceForge** (producto): `compose.spec.yaml` + `.github/workflows/build.yml` → ver
-  `deploy/marketplaceforge/README.md`. El `env` del spec es literal: los secretos los genera la api
+  `deploy/marketplaceforge/README.md`. La `api` es la imagen protegida en su variante sin puerta de
+  licencia (el pipeline no pasa build args); la puerta por host queda para entregas directas. El `env` del spec es literal: los secretos los genera la api
   en el primer arranque (`secretos.py`, volumen `chatrag-secretos`); usuarios y sesiones en
   SQLite (`CHATRAG_AUTH_DB`); el corpus se siembra e ingiere solo (`arranque.py`). Validar el spec
   contra `composeSpecIngestSchema` antes de cada cambio.

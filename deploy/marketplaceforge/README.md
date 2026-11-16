@@ -11,15 +11,15 @@ Contrato: `Tribucorp/sparkhub` → `.github/workflows/build-demo.yml` y
 |---|---|
 | `compose.spec.yaml` | Lo que arranca `sparkd` (formato del marketplace, no docker compose). |
 | `.github/workflows/build.yml` | Llama a `build-demo.yml@main` con `images`, `mirror` y `prepare_script`. |
-| `deploy/marketplaceforge/preparar_build.sh` | Construye en el runner ARM64 los 6 wheels `tribu-*` (tag fijada en `backend/pyproject.toml`). |
+| `deploy/marketplaceforge/preparar_build.sh` | Construye en el runner ARM64 los 7 wheels `tribu-*` (tag fijada en `backend/pyproject.toml`). |
 | `deploy/Dockerfile.frontend` | Imagen principal (`app`). Monta el secreto de BuildKit `node_auth_token` para `@tribu/auth`. |
-| `deploy/Dockerfile.backend` | Imagen `api`. |
+| `deploy/Dockerfile.backend.protegido` | Imagen `api`: compilada con Nuitka, sin código fuente. Sin `CHATRAG_LICENSE_KEYS` (el pipeline no pasa build args) sale **sin puerta de licencia por host**: quién instala lo controla la plataforma. |
 
 ## Imágenes para el catálogo
 
 **Propias** (las construye, escanea y firma el pipeline):
 - `app` ← `deploy/Dockerfile.frontend`
-- `api` ← `deploy/Dockerfile.backend`
+- `api` ← `deploy/Dockerfile.backend.protegido` (variante sin puerta; ver arriba)
 
 **`mirror`** (terceros, por digest; el pipeline las copia, escanea y firma):
 - `etcd` ← `quay.io/coreos/etcd@sha256:d0a641d5fbcc89678c931a61b7de7b8a1cf097149f135c9c73bc81d076a1494b` (v3.5.18)
@@ -80,3 +80,25 @@ import { composeSpecIngestSchema } from "./src/mqtt/desired.ts";
 const r = composeSpecIngestSchema.safeParse(JSON.parse(readFileSync("/tmp/spec.json", "utf8")));
 console.log(r.success ? "VÁLIDO" : r.error.issues);'
 ```
+
+## Alta en la plataforma (una vez, la hace Javier)
+
+El build no se lanza a mano: lo dispara la API de MarketplaceForge al recibir un push a `main`
+(canal beta, versión = sha[0:12]) o a un tag (stable), y es ella quien crea el `build_id`. Antes
+del primer build hace falta, en `Tribucorp/sparkhub`:
+
+1. Dar de alta la demo `chatrag` y vincular el repo (script de catálogo como
+   `apps/api/scripts/catalogo-showrunforge.ts`, con `--solo-registro`), con sus requisitos y los
+   `ngcImages` de arriba.
+2. Webhook de push en `Tribucorp/chatrag` → `https://api.tribucorp.es/v1/webhooks/github`.
+3. Acceso del PAT de disparo (`GITHUB_BUILD_DISPATCH_TOKEN`, `actions:write`) a este repo.
+
+Tras el primer build, el mismo script sin `--solo-registro` la añade al plan.
+
+## Verificado en local (16-nov)
+
+Imágenes construidas como en el pipeline (`chatrag-api` protegida sin claves, `chatrag-frontend`)
+y arrancadas con la configuración del spec (solo lectura, `capDrop: ALL`, volumen de secretos
+compartido): secretos 0600 de UID 10001, `/health` con licencia `desactivada`, login demo, chat
+503 «arrancando» sin Milvus, admin solo con la sesión (cliente 403), CSRF 403 con Origin ajeno y
+sesión que sobrevive al reinicio. Spec válido contra `composeSpecIngestSchema` de sparkhub `main`.

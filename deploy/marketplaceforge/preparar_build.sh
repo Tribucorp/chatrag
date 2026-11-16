@@ -3,10 +3,10 @@
 # .github/workflows/build-demo.yml, input prepare_script). Corre desde la raíz del repo, en el
 # runner ARM64 nativo, antes de construir las imágenes; es el único paso que ve TRIBU_SDK_TOKEN.
 #
-# Construye los 6 wheels tribu-* que copia deploy/Dockerfile.backend (deploy/wheels/), desde la
-# MISMA tag del SDK que fija backend/pyproject.toml. tribu-audit y tribu-crypto son nativos
-# (PyO3/Rust): se compilan aquí en aarch64 con el toolchain que fija el propio SDK. Exigen
-# GLIBC ≤ 2.34 (comprobado), por debajo de la de python:3.12-slim.
+# Construye los 7 wheels tribu-* que copia deploy/Dockerfile.backend.protegido (deploy/wheels/),
+# desde la MISMA tag del SDK que fija backend/pyproject.toml. tribu-audit, tribu-crypto y
+# tribu-licensing son nativos (PyO3/Rust): se compilan aquí en aarch64 con el toolchain que
+# fija el propio SDK. Exigen GLIBC ≤ 2.34 (comprobado), por debajo de la de wolfi-base.
 set -euo pipefail
 
 TAG="$(grep -m1 -o 'tag = "v[0-9.]*"' backend/pyproject.toml | cut -d'"' -f2)"
@@ -26,9 +26,9 @@ TOOLCHAIN="$(grep -m1 '^channel' "$SDK/rust-toolchain.toml" | cut -d'"' -f2)"
 rustup toolchain install "$TOOLCHAIN" --profile minimal
 
 rm -rf deploy/wheels && mkdir -p deploy/wheels
-for PKG in tribu-http tribu-rag tribu-guardrails tribu-voice tribu-audit tribu-crypto; do
+for PKG in tribu-http tribu-rag tribu-guardrails tribu-voice tribu-audit tribu-crypto tribu-licensing; do
   (cd "$SDK/python/$PKG" && uv build --wheel --quiet -o "$OLDPWD/deploy/wheels")
 done
 rm -rf "$SDK"
-[ "$(ls deploy/wheels/*.whl | wc -l)" -eq 6 ] || { echo "::error::esperaba 6 wheels tribu-*"; exit 1; }
+[ "$(ls deploy/wheels/*.whl | wc -l)" -eq 7 ] || { echo "::error::esperaba 7 wheels tribu-*"; exit 1; }
 echo "SDK $TAG → deploy/wheels:"; ls deploy/wheels

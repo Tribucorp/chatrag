@@ -9,9 +9,16 @@
 #     despliegue_spark.sh); conservan su __init__.py, que solo reexporta la API del .so.
 #   - tribu_licensing también trae núcleo Rust, pero su capa Python (sobre, huella) SÍ tiene
 #     lógica: se compila con Nuitka como los puros y se conserva solo su .so de Rust interno.
-#   - Puerta de licencia por host (chatrag_api/licencia.py) HORNEADA: obligatoria, con las
-#     claves públicas de confianza del build-arg CHATRAG_LICENSE_KEYS, compiladas dentro del
-#     .so de chatrag_api. El entorno del tercero no puede apagarla ni cambiar las claves.
+#   - Puerta de licencia por host (chatrag_api/licencia.py), según el build-arg
+#     CHATRAG_LICENSE_KEYS:
+#       · con claves → HORNEADA y obligatoria, con esas claves públicas de confianza compiladas
+#         dentro del .so de chatrag_api. El entorno del tercero no puede apagarla ni cambiarlas.
+#         Es la build para entregar a un host concreto (deploy/docker-compose.licencia.yml).
+#       · sin claves → SIN puerta (la del repo, apagada). Es la build de MarketplaceForge
+#         (build-demo.yml no pasa build args a las imágenes extra): ahí quién instala lo controla
+#         la plataforma, que firma y distribuye. Sigue siendo código compilado, sin fuente.
+#     La etiqueta `chatrag.licencia.claves` de la imagen dice cuál de las dos es (vacía = sin
+#     puerta).
 #   - Puertas de build: si algo no compila, no importa o queda un .py/.pyc nuestro, la build
 #     FALLA (nada de `|| true`).
 #
@@ -20,9 +27,10 @@
 # impide. La barrera de "solo corre donde está licenciado" es la licencia por host (arriba).
 #
 # Build (desde la raíz del repo, en una máquina arm64 o con buildx). La clave pública sale de
-# `deploy/emitir_licencia.py claves`; sin ella la build falla (no hay imagen protegida sin puerta):
+# `deploy/emitir_licencia.py claves`:
 #   docker build -f deploy/Dockerfile.backend.protegido \
 #     --build-arg CHATRAG_LICENSE_KEYS=chatrag-2026:<hex de 32 bytes> -t chatrag-api:protegido .
+# Sin el build-arg sale la variante sin puerta (MarketplaceForge, ver arriba).
 # Correr (montajes de la huella de solo lectura + el sobre emitido para ESTE host):
 #   -v /etc/machine-id:/host/etc/machine-id:ro -v /sys:/host/sys:ro
 #   -v ./license.json:/run/chatrag/license.json:ro
@@ -38,13 +46,14 @@ COPY backend/pyproject.toml backend/uv.lock ./
 COPY backend/src ./src
 COPY deploy/wheels ./wheels
 
-# 0) Horneado de la puerta de licencia: sobreescribe el _licencia_horneada.py del repo (puerta
-#    apagada) ANTES de instalar y compilar, así acaba dentro del .so de chatrag_api.
-ARG CHATRAG_LICENSE_KEYS
+# 0) Horneado de la puerta de licencia: con claves, sobreescribe el _licencia_horneada.py del
+#    repo (puerta apagada) ANTES de instalar y compilar, así acaba dentro del .so de chatrag_api.
+#    Sin claves se deja el del repo: variante sin puerta (MarketplaceForge).
+ARG CHATRAG_LICENSE_KEYS=""
 RUN CHATRAG_LICENSE_KEYS="$CHATRAG_LICENSE_KEYS" /usr/bin/python3.11 -c "\
-import os, re; raw = os.environ.get('CHATRAG_LICENSE_KEYS', ''); \
+import os, re, sys; raw = os.environ.get('CHATRAG_LICENSE_KEYS', ''); \
 keys = dict(item.strip().split(':', 1) for item in raw.split(',') if item.strip()); \
-assert keys, 'falta --build-arg CHATRAG_LICENSE_KEYS=key_id:<hex>: no hay imagen protegida sin licencia'; \
+keys or sys.exit(print('SIN puerta de licencia (variante MarketplaceForge): no se pasó CHATRAG_LICENSE_KEYS')); \
 assert all(k and re.fullmatch('[0-9a-f]{64}', v) for k, v in keys.items()), 'CHATRAG_LICENSE_KEYS mal formado'; \
 open('src/chatrag_api/_licencia_horneada.py', 'w').write( \
   '# Generado por Dockerfile.backend.protegido\n' \
@@ -101,16 +110,17 @@ RUN set -eux; SP=$(/opt/venv/bin/python -c "import site; print(site.getsitepacka
 #    uvicorn/FastAPI resuelven por nombre) y la API Rust híbrida sigue intacta.
 RUN /opt/venv/bin/python -c "\
 import importlib; \
-[importlib.import_module(m) for m in ('chatrag_api.app','chatrag_api.rag','chatrag_api.ingest','chatrag_api.voice','chatrag_api.licencia','tribu_http.client','tribu_rag.milvus_store','tribu_guardrails.tool_poisoning','tribu_voice')]; \
+[importlib.import_module(m) for m in ('chatrag_api.app','chatrag_api.rag','chatrag_api.ingest','chatrag_api.voice','chatrag_api.licencia','chatrag_api.arranque','chatrag_api.secretos','tribu_http.client','tribu_rag.milvus_store','tribu_guardrails.tool_poisoning','tribu_voice')]; \
 import tribu_licensing as tl; assert all(hasattr(tl, a) for a in ('verify_envelope', 'collect_host_component_hashes', 'check_clock_rollback')), 'tribu_licensing sin API'; \
-from chatrag_api import _licencia_horneada as h; assert h.ENFORCED and h.TRUSTED_KEYS_HEX and h.STATE_FILE, 'puerta no horneada'; \
+import os; from chatrag_api import _licencia_horneada as h; con_puerta = bool(os.environ.get('CHATRAG_LICENSE_KEYS')); \
+assert h.ENFORCED == con_puerta and bool(h.TRUSTED_KEYS_HEX) == con_puerta, 'horneado inconsistente con CHATRAG_LICENSE_KEYS'; \
 from chatrag_api.app import create_app; \
 app = create_app(); schema = app.openapi(); \
 assert {'/health', '/query', '/admin/licencia'} <= set(schema['paths']), sorted(schema['paths']); \
-gate = app.state.license_gate; assert gate.enforced and gate.horneada and gate.estado() == 'inerte', gate.resumen(); \
+gate = app.state.license_gate; assert (gate.estado() == 'inerte' and gate.horneada) if con_puerta else gate.estado() == 'desactivada', gate.resumen(); \
 import tribu_crypto, tribu_audit; assert hasattr(tribu_audit, 'AuditChain'); \
 assert all(hasattr(tribu_crypto, a) for a in ('sign', 'verify')), 'tribu_crypto sin API'; \
-print('OK: chatrag-api compilado importa')"
+print('OK: chatrag-api compilado importa; puerta', gate.estado())"
 # 5) Sin bytecode ni fuente nuestros en lo que se copia a la final.
 RUN set -eux; SP=$(/opt/venv/bin/python -c "import site; print(site.getsitepackages()[0])"); \
     find "$SP" \( -path "*/chatrag_api*" -o -path "*/tribu_*" \) -name "__pycache__" -type d -prune -exec rm -rf {} +; \
@@ -128,18 +138,29 @@ RUN apk add --no-cache python-3.11 && rm -rf /var/cache/apk/*
 COPY --from=builder /usr/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
 COPY --from=builder /usr/lib/libstdc++.so.6* /usr/lib/
 COPY --from=builder /opt/venv /opt/venv
-# Corpus de arranque (contenido, no código) para el init-container seed-knowledge.
+# Corpus de arranque (contenido, no código): chatrag-api lo copia a /knowledge si está vacío
+# (CHATRAG_SEED_KNOWLEDGE_DIR, arranque.py), y también lo usa el init-container seed-knowledge
+# de los compose de la Spark.
 COPY knowledge /seed-knowledge
 # Directorios de los volúmenes con nombre, ya del usuario sin privilegios: Docker inicializa un
-# volumen nuevo con el propietario del directorio de la imagen, así que el proceso nonroot
-# puede escribir el tema (/data) y los documentos subidos (/knowledge) sin un chown aparte.
-RUN mkdir -p /knowledge /data && chown 65532:65532 /knowledge /data
+# volumen nuevo con el propietario del directorio de la imagen, así que el proceso puede escribir
+# el tema (/data), los documentos subidos (/knowledge) y los secretos de primer arranque
+# (/secretos, 0700) sin un chown aparte. UID 10001, el mismo que el frontend: este lee los
+# secretos 0600 que genera la api en el volumen compartido (MarketplaceForge).
+ARG CHATRAG_LICENSE_KEYS=""
+RUN mkdir -p /knowledge /data /secretos && chown 10001:10001 /knowledge /data /secretos \
+    && chmod 0700 /secretos
+# Claves públicas horneadas (públicas por definición); vacía = variante sin puerta.
+LABEL chatrag.licencia.claves="${CHATRAG_LICENSE_KEYS}"
 ENV PATH=/opt/venv/bin:$PATH \
     PYTHONPATH=/opt/venv/lib/python3.11/site-packages \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     CHATRAG_LICENSE_FILE=/run/chatrag/license.json \
-    CHATRAG_LICENSE_HOST_ROOT=/host
-USER 65532:65532
+    CHATRAG_LICENSE_HOST_ROOT=/host \
+    CHATRAG_KNOWLEDGE_DIR=/knowledge \
+    CHATRAG_SEED_KNOWLEDGE_DIR=/seed-knowledge \
+    CHATRAG_THEME_FILE=/data/theme.json
+USER 10001:10001
 EXPOSE 8080
 CMD ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]
