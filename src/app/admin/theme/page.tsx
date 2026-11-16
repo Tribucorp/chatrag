@@ -202,7 +202,7 @@ export default function AdminThemePage() {
             </select>
           </label>
           <p className="text-xs text-white/30">
-            Solo aplica si la voz está habilitada (NEXT_PUBLIC_VOICE_ENABLED). El nombre de
+            Solo aplica si la voz está habilitada (CHATRAG_VOICE_ENABLED). El nombre de
             marca de la voz es el mismo &quot;Nombre de la app&quot; de arriba.
           </p>
         </div>

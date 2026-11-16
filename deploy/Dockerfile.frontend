@@ -16,9 +16,6 @@ COPY package.json package-lock.json .npmrc ./
 RUN --mount=type=secret,id=node_auth_token,required=true \
     NODE_AUTH_TOKEN="$(cat /run/secrets/node_auth_token)" npm ci
 COPY . .
-# Voz en el navegador: NEXT_PUBLIC_* se incrusta al compilar (lo pasa el compose como build arg).
-ARG NEXT_PUBLIC_VOICE_ENABLED=0
-ENV NEXT_PUBLIC_VOICE_ENABLED=${NEXT_PUBLIC_VOICE_ENABLED}
 # Lista de fuentes bajo cada respuesta (1 = visible, el comportamiento del producto).
 ARG NEXT_PUBLIC_SHOW_CITATIONS=1
 ENV NEXT_PUBLIC_SHOW_CITATIONS=${NEXT_PUBLIC_SHOW_CITATIONS}
@@ -39,9 +36,16 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
-# Sin root: el usuario `node` (uid 1000) de la imagen base.
-USER node
 # Sin public/ en este repo todavía (sin assets estáticos propios) — si se añade, descomentar:
 # COPY --from=build /app/public ./public
+# Usuario sin privilegios (el `node` de la imagen base es UID 1000; se usa el mismo 10001 que
+# chatrag-api para leer los secretos 0600 que esta genera en el volumen compartido). /data guarda
+# la BD SQLite de tribu-auth (CHATRAG_AUTH_DB); dueño fijado aquí, ver Dockerfile.backend.
+RUN groupadd --system --gid 10001 chatrag \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /app chatrag \
+    && mkdir -p /data /secretos \
+    && chown 10001:10001 /data /secretos \
+    && chmod 0700 /secretos
+USER 10001
 EXPOSE 3000
 CMD ["node", "server.js"]

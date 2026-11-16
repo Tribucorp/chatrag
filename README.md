@@ -154,7 +154,7 @@ ese recolector exista sobre `tribu-rag`, no antes.
 
 ## Voz
 
-Apagada por defecto, opt-in explícito (`CHATRAG_VOICE_ENABLED`/`NEXT_PUBLIC_VOICE_ENABLED=0`).
+Apagada por defecto, opt-in explícito (`CHATRAG_VOICE_ENABLED=0`, en backend y frontend, leído en runtime).
 `tribu-voice` está **integrado** (`backend/src/chatrag_api/voice.py`): síntesis TTS + avatar +
 token efímero reales, sobre el código auditado del SDK. La revisión legal de NVIDIA
 (Product-Specific Terms §C.1.1/§C.1.2) fue confirmada por Javier (ver CLAUDE.md) — pero la

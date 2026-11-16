@@ -12,5 +12,12 @@ export default async function Page() {
   await ensureAuthReady();
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/login");
-  return <Home email={session.user.email} />;
+  // La voz se decide en tiempo de ejecución (env del contenedor / variables de la solución en el
+  // portal), no al compilar: el pipeline del marketplace no pasa build-args propios.
+  return (
+    <Home
+      email={session.user.email}
+      voiceEnabled={process.env.CHATRAG_VOICE_ENABLED === "1"}
+    />
+  );
 }
