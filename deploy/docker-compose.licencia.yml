@@ -11,6 +11,15 @@
 # huella, o: docker compose ... run --rm chatrag-api chatrag-licencia huella
 #
 # Los despliegues propios (imagen normal) NO usan este override: no necesitan /sys del host.
+#
+# Migrar un host que ya corría la imagen NORMAL: sus volúmenes chatrag-data/chatrag-knowledge
+# son de root, y la protegida corre como 65532 — sin escribir /data no persiste el reloj de la
+# licencia y queda inerte (estado_no_persistible). Una vez, antes del `up`:
+#   docker run --rm -v chatrag_chatrag-data:/d -v chatrag_chatrag-knowledge:/k \
+#     --entrypoint chown chatrag-api:latest -R 65532:65532 /d /k
+# Volver a la imagen normal no requiere deshacerlo (corre como root).
+# No pongas CHATRAG_API_IMAGE=…:protegido en el .env de despliegue_spark.sh: su fase de build
+# construye con deploy/Dockerfile.backend y pisaría esa etiqueta con la imagen normal.
 
 services:
   chatrag-api:
