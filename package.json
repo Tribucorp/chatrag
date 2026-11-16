@@ -13,7 +13,7 @@
     "@tribu/auth": "npm:@tribucorp/tribu-auth@1.0.0",
     "better-auth": "^1.6.28",
     "lucide-react": "^0.575.0",
-    "next": "^16.2.4",
+    "next": "^16.4.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "server-only": "^0.0.1"
@@ -25,10 +25,10 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.3.1",
     "eslint": "^9",
-    "eslint-config-next": "16.1.6",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vitest": "^2.1.9"
+    "vitest": "^4.1.12"
   }
 }
