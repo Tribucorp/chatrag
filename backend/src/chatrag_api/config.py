@@ -16,8 +16,11 @@ Notas heredadas del SDK que se materializan aquí:
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from chatrag_api.secretos import ensure_secrets, secret_from_env_or_dir
 
 DEFAULT_EMBED_DIM = 2048
 
@@ -132,10 +135,24 @@ class Settings(BaseModel):
     # montados, de solo lectura, /etc/machine-id y /sys del host.
     license_file: str | None = None
     license_host_root: str = "/"
+    # Despliegue en MarketplaceForge (sin init-containers, ver compose.spec.yaml): corpus de
+    # arranque que se copia a `knowledge_dir` si está vacío, e ingesta automática del corpus si el
+    # índice del tenant aún no existe (la hace el arranque en segundo plano, con reintentos).
+    seed_knowledge_dir: str | None = None
+    auto_ingest: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
         """Construye desde variables de entorno, con los defaults on-prem del SDK."""
+
+        # Secretos de primer arranque (ver secretos.py): se crean ANTES de leerlos.
+        if os.environ.get("CHATRAG_GENERATE_SECRETS") == "1":
+            raw_dir = os.environ.get("CHATRAG_SECRETS_DIR")
+            if not raw_dir:
+                raise ValueError(
+                    "CHATRAG_GENERATE_SECRETS=1 exige CHATRAG_SECRETS_DIR (volumen de secretos)"
+                )
+            ensure_secrets(Path(raw_dir))
 
         hosts = os.environ.get("CHATRAG_EGRESS_HOSTS")
         allowed = (
@@ -146,7 +163,7 @@ class Settings(BaseModel):
         return cls(
             app_name=os.environ.get("CHATRAG_APP_NAME", "ChatRAG"),
             embed_dim=int(os.environ.get("CHATRAG_EMBED_DIM", DEFAULT_EMBED_DIM)),
-            tenant_id=os.environ.get("CHATRAG_TENANT_ID", "chatrag-santiago"),
+            tenant_id=os.environ.get("CHATRAG_TENANT_ID", "chatrag"),
             milvus_uri=os.environ.get("CHATRAG_MILVUS_URI", "http://localhost:19530"),
             nim_embed_url=os.environ.get("CHATRAG_NIM_EMBED_URL", "http://localhost:8002"),
             nim_rerank_url=os.environ.get("CHATRAG_NIM_RERANK_URL", "http://localhost:8003"),
@@ -163,14 +180,16 @@ class Settings(BaseModel):
             egress_allowed_hosts=allowed,
             voice_enabled=os.environ.get("CHATRAG_VOICE_ENABLED", "0") == "1",
             dev_identity_bypass=os.environ.get("CHATRAG_DEV_IDENTITY_BYPASS") or None,
-            service_bearer_token=os.environ.get("CHATRAG_SERVICE_BEARER_TOKEN") or None,
+            service_bearer_token=secret_from_env_or_dir(
+                "CHATRAG_SERVICE_BEARER_TOKEN", "service_bearer_token"
+            ),
             audit_database_url=os.environ.get("CHATRAG_AUDIT_DATABASE_URL") or None,
             audit_chain_key=(
                 bytes.fromhex(chain_key_hex)
                 if (chain_key_hex := os.environ.get("CHATRAG_AUDIT_CHAIN_KEY"))
                 else None
             ),
-            admin_token=os.environ.get("CHATRAG_ADMIN_TOKEN") or None,
+            admin_token=secret_from_env_or_dir("CHATRAG_ADMIN_TOKEN", "admin_token"),
             knowledge_dir=os.environ.get("CHATRAG_KNOWLEDGE_DIR", "../knowledge"),
             theme_file=os.environ.get("CHATRAG_THEME_FILE", "../theme.json"),
             rate_limit_max_requests=int(os.environ.get("CHATRAG_RATE_LIMIT_MAX_REQUESTS", "30")),
@@ -191,6 +210,8 @@ class Settings(BaseModel):
             license_state_file=os.environ.get("CHATRAG_LICENSE_STATE_FILE") or None,
             license_file=os.environ.get("CHATRAG_LICENSE_FILE") or None,
             license_host_root=os.environ.get("CHATRAG_LICENSE_HOST_ROOT") or "/",
+            seed_knowledge_dir=os.environ.get("CHATRAG_SEED_KNOWLEDGE_DIR") or None,
+            auto_ingest=os.environ.get("CHATRAG_AUTO_INGEST") == "1",
         )
 
 

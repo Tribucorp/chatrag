@@ -42,14 +42,10 @@ def verify_admin_bearer(
         raise HTTPException(status_code=401, detail="falta o es inválido el bearer de admin")
 
 
-def get_ingestor(request: Request) -> Ingestor:
-    """Dependencia de FastAPI (no `app.state`, a diferencia de retriever/generator/audit_log en
-    `app.py`): la ingesta es una acción bajo demanda, no algo que necesite vivir construido
-    durante todo el ciclo de vida del proceso — se construye en cada llamada, con import
-    perezoso real solo dentro de `TribuRagIngestor` (ver `ingest.py`). Overrideable en tests vía
-    `app.dependency_overrides[get_ingestor]`."""
+def ingestor_from_settings(settings: Settings) -> Ingestor:
+    """El ingestor real a partir de la configuración — lo comparten `/admin/reindex` y la
+    ingesta automática del primer arranque (arranque.py)."""
 
-    settings: Settings = request.app.state.settings
     return tribu_rag_ingestor(
         tenant_id=settings.tenant_id,
         milvus_uri=settings.milvus_uri,
@@ -60,6 +56,16 @@ def get_ingestor(request: Request) -> Ingestor:
         nim_chat_model=settings.nim_chat_model,
         allowed_hosts=settings.egress_allowed_hosts,
     )
+
+
+def get_ingestor(request: Request) -> Ingestor:
+    """Dependencia de FastAPI (no `app.state`, a diferencia de retriever/generator/audit_log en
+    `app.py`): la ingesta es una acción bajo demanda, no algo que necesite vivir construido
+    durante todo el ciclo de vida del proceso — se construye en cada llamada, con import
+    perezoso real solo dentro de `TribuRagIngestor` (ver `ingest.py`). Overrideable en tests vía
+    `app.dependency_overrides[get_ingestor]`."""
+
+    return ingestor_from_settings(request.app.state.settings)
 
 
 @router.post("/reindex", dependencies=[Depends(verify_admin_bearer)])

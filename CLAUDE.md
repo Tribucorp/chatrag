@@ -13,15 +13,16 @@ Tribu SDK** — su feedback define la DX del SDK.
 ## Arquitectura
 
 - **Frontend** (`src/`): Next.js 16 + React 19. Chat de texto contra el backend, con modo de
-  voz opcional (`/voice/*`, gateado por `NEXT_PUBLIC_VOICE_ENABLED`); muestra las citas con su
+  voz opcional (`/voice/*`, gateado por `CHATRAG_VOICE_ENABLED`, leído en runtime); muestra las citas con su
   fuente. **Sin proveedores cloud de voz** (se retiró ElevenLabs) — la voz, cuando está
   encendida, es Riva on-prem vía `tribu-voice`, nunca una API cloud. Panel de administración en
   `/admin` (ingesta/reindex del RAG, estado del índice, auditoría), `/admin/theme` (theming:
   colores, logo, tipografía, densidad, estilo de burbuja, copy de la cabecera, y qué voz stock
   usa el asistente — ver `backend/src/chatrag_api/theme.py`) y `/admin/conversations` (vista
   operativa de conversaciones recientes + métricas de consumo del RAG, sobre un buffer en
-  memoria — `conversations.py` — distinto del audit trail), todos protegidos por
-  `CHATRAG_ADMIN_TOKEN`.
+  memoria — `conversations.py` — distinto del audit trail). Se entra con la sesión del rol de
+  administración; el BFF añade server-side el bearer `CHATRAG_ADMIN_TOKEN` del backend (nunca
+  llega al navegador).
 - **Backend** (`backend/`): FastAPI (`chatrag-api`) que consume los módulos del SDK como
   **dependencias git fijadas a una tag** (ADR-0020 del SDK, `docs/CONSUMIR_EL_SDK.md`; hoy
   **v1.0.0**, misma tag en todas las líneas de `[tool.uv.sources]`) — nunca vendorizar ni
@@ -79,13 +80,26 @@ Tribu SDK** — su feedback define la DX del SDK.
     la build (`_licencia_horneada.py`, compilado por Nuitka), nunca por entorno: apagada en
     dev, tests e imagen normal. Emisión fuera de la imagen: `deploy/emitir_licencia.py`.
 
+## Despliegue
+
+- **MarketplaceForge** (producto): `compose.spec.yaml` + `.github/workflows/build.yml` → ver
+  `deploy/marketplaceforge/README.md`. La `api` es la imagen protegida en su variante sin puerta de
+  licencia (el pipeline no pasa build args); la puerta por host queda para entregas directas. El `env` del spec es literal: los secretos los genera la api
+  en el primer arranque (`secretos.py`, volumen `chatrag-secretos`); usuarios y sesiones en
+  SQLite (`CHATRAG_AUTH_DB`); el corpus se siembra e ingiere solo (`arranque.py`). Validar el spec
+  contra `composeSpecIngestSchema` antes de cada cambio.
+- **GB10 con SSH** (`deploy/docker-compose.chatrag-spark.yml` + `deploy/despliegue_spark.sh`):
+  para validar en hardware real.
+- **Sin MinIO**: Milvus con almacenamiento local. Las imágenes comunitarias de MinIO ya no se
+  publican; el compose de Milvus de `tribu-rag` (que lo usa) no se puede desplegar tal cual.
+
 ## Reglas propias (además de las del SDK)
 
 - **Citas o abstención**: toda respuesta va con procedencia (`source_uri`); si tras el filtrado
   por ACL no queda base accesible, el backend **se abstiene** en vez de inventar.
 - **ACL de la fuente en el servidor**: el filtrado de qué puede ver el usuario ocurre en el
   backend (`rag.filter_by_acl`), nunca en el cliente.
-- **Voz apagada por defecto** (`CHATRAG_VOICE_ENABLED`/`NEXT_PUBLIC_VOICE_ENABLED`, opt-in
+- **Voz apagada por defecto** (`CHATRAG_VOICE_ENABLED` en backend y frontend, opt-in
   explícito por entorno) — la revisión legal ya está confirmada (ver arriba), pero la regla
   dura sigue: solo voces stock, nunca clonación, nunca inferir la emoción del usuario desde su
   audio. Eso no es negociable por configuración.

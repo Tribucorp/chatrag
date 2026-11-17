@@ -17,7 +17,7 @@ import { blobToWav16kMono } from "@/lib/wav";
 // ACL en el servidor.
 //
 // Voz (Fase C, sobre tribu-voice real — ver backend/src/chatrag_api/voice.py): gateada por
-// NEXT_PUBLIC_VOICE_ENABLED. El micrófono graba con MediaRecorder, se transcribe vía
+// CHATRAG_VOICE_ENABLED (leída en el servidor en tiempo de ejecución, ver src/app/page.tsx). El micrófono graba con MediaRecorder, se transcribe vía
 // /api/voice/transcribe (ASR propio de ChatRAG, no parte de tribu-voice) y el texto entra al
 // mismo flujo que si se hubiera escrito; la respuesta se lee en voz alta vía /api/voice/speak
 // (TTS real sobre tribu-voice, solo voces stock). El contrato de red con el NIM Riva real está
@@ -29,14 +29,13 @@ type Answer = { text: string; citations: Citation[]; abstained: boolean };
 type Turn = { role: "user" | "assistant"; content: string; citations?: Citation[] };
 type VoiceSession = { token_id: string; face_id: string; expires_at: number };
 
-const VOICE_ENABLED = process.env.NEXT_PUBLIC_VOICE_ENABLED === "1";
 // Lista de fuentes bajo cada respuesta: visible por defecto (regla "citas o abstención").
 // El backend solo devuelve las que la respuesta cita, numeradas como las marcas `[n]` del
 // texto. NEXT_PUBLIC_SHOW_CITATIONS=0 oculta lista y marcas solo en la UI — el backend sigue
 // devolviendo y auditando las citas igual.
 const SHOW_CITATIONS = process.env.NEXT_PUBLIC_SHOW_CITATIONS !== "0";
 
-export function ChatAgent() {
+export function ChatAgent({ voiceEnabled = false }: { voiceEnabled?: boolean }) {
   const router = useRouter();
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
@@ -106,18 +105,23 @@ export function ChatAgent() {
           ...t,
           { role: "assistant", content: answer.text, citations: answer.citations },
         ]);
-        if (VOICE_ENABLED && voiceToken) void speak(voiceToken, stripCiteMarkers(answer.text));
+        if (voiceEnabled && voiceToken) void speak(voiceToken, stripCiteMarkers(answer.text));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Error consultando el asistente");
       } finally {
         setLoading(false);
       }
     },
-    [input, loading, speak, router]
+    [input, loading, speak, router, voiceEnabled]
   );
 
   const startRecording = useCallback(async () => {
     setError("");
+    if (!window.isSecureContext) {
+      // Los navegadores solo dan micrófono en https o en localhost (no por http://IP).
+      setError("El micrófono necesita una conexión https (o abrir el asistente en el propio equipo).");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -275,7 +279,7 @@ export function ChatAgent() {
           placeholder="Escribe tu pregunta…"
           className="flex-1 rounded-[var(--chatrag-radius)] border border-white/10 bg-white/[0.03] px-4 py-3 text-sm outline-none focus:border-white/25"
         />
-        {VOICE_ENABLED && (
+        {voiceEnabled && (
           <button
             onClick={recording ? stopRecording : startRecording}
             disabled={transcribing || loading}
@@ -303,12 +307,12 @@ export function ChatAgent() {
         </button>
       </div>
 
-      {VOICE_ENABLED ? (
+      {voiceEnabled ? (
         <audio ref={audioRef} hidden />
       ) : (
         <div className="flex items-center justify-center gap-2 text-[11px] text-white/35">
           <MicOff className="h-3.5 w-3.5" />
-          Voz deshabilitada (NEXT_PUBLIC_VOICE_ENABLED=0) — Riva stock, sin clonación
+          Voz deshabilitada (CHATRAG_VOICE_ENABLED=0) — Riva stock, sin clonación
         </div>
       )}
     </div>

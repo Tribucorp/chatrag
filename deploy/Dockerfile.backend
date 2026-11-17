@@ -32,12 +32,23 @@ WORKDIR /app
 COPY --from=build /opt/venv /opt/venv
 COPY --from=build /app/src /app/src
 COPY backend/pyproject.toml /app/pyproject.toml
-# Seed inicial del corpus (ver el servicio seed-knowledge en docker-compose.chatrag-spark.yml):
-# copiado UNA VEZ al volumen con nombre /knowledge si está vacío, nunca pisa documentos subidos
-# después vía POST /admin/sources — este directorio en la imagen es solo el punto de partida.
+# Corpus de arranque: chatrag-api lo copia a /knowledge si está vacío (CHATRAG_SEED_KNOWLEDGE_DIR,
+# arranque.py) y nunca pisa documentos subidos después desde /admin.
 COPY knowledge /seed-knowledge
+# Usuario sin privilegios. Los puntos de montaje se crean aquí con su dueño: Docker copia dueño y
+# contenido de la imagen a un volumen con nombre nuevo, así que el proceso puede escribir en ellos
+# sin un init-container que haga chown (sparkd no tiene init-containers).
+RUN groupadd --system --gid 10001 chatrag \
+    && useradd --system --uid 10001 --gid 10001 --home-dir /app chatrag \
+    && mkdir -p /knowledge /data /secretos \
+    && chown 10001:10001 /knowledge /data /secretos \
+    && chmod 0700 /secretos
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV CHATRAG_KNOWLEDGE_DIR=/knowledge
+ENV CHATRAG_SEED_KNOWLEDGE_DIR=/seed-knowledge
+ENV CHATRAG_THEME_FILE=/data/theme.json
+USER 10001
 EXPOSE 8080
 CMD ["uvicorn", "chatrag_api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

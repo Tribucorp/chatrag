@@ -3,7 +3,7 @@
 import { ChatAgent } from "@/components/chat-agent";
 import { useTheme } from "@/lib/theme-context";
 
-export function Home({ email }: { email: string }) {
+export function Home({ email, voiceEnabled }: { email: string; voiceEnabled: boolean }) {
   const theme = useTheme();
 
   return (
@@ -30,7 +30,7 @@ export function Home({ email }: { email: string }) {
         {theme.description_text}
       </p>
 
-      <ChatAgent />
+      <ChatAgent voiceEnabled={voiceEnabled} />
 
       <footer className="mt-12 text-center text-[11px] text-white/35">
         Respuestas con fuente · Tribu SDK (on-prem, NVIDIA-native)

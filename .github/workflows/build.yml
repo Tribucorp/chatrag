@@ -1,0 +1,38 @@
+name: build-marketplaceforge
+# Receptor del pipeline de MarketplaceForge (Tribucorp/sparkhub): su API llama a workflow_dispatch
+# sobre este fichero tras un push, con build_id, canal y commit. Delega build ARM64, escaneo
+# (grype), firma con la clave de la plataforma y publicación en Harbor al workflow reutilizable;
+# aquí solo se dice qué se construye. Ver compose.spec.yaml y deploy/marketplaceforge/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      build_id:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+        default: beta
+      git_sha:
+        required: true
+        type: string
+jobs:
+  build:
+    uses: Tribucorp/sparkhub/.github/workflows/build-demo.yml@main
+    with:
+      demo_slug: chatrag
+      harbor_project: demos
+      build_id: ${{ inputs.build_id }}
+      git_sha: ${{ inputs.git_sha }}
+      # app = frontend (BFF + UI). Monta el secreto de BuildKit node_auth_token (@tribu/auth).
+      dockerfile: deploy/Dockerfile.frontend
+      # Wheels tribu-* del SDK para la imagen de la api (único paso con TRIBU_SDK_TOKEN).
+      # api = imagen PROTEGIDA (Nuitka, sin fuente) en su variante sin puerta de licencia: este
+      # pipeline no pasa build args, y sin CHATRAG_LICENSE_KEYS la build no hornea la puerta.
+      prepare_script: deploy/marketplaceforge/preparar_build.sh
+      images: >-
+        [{"service":"api","dockerfile":"deploy/Dockerfile.backend.protegido","context":"."}]
+      mirror: >-
+        [{"service":"etcd","source":"quay.io/coreos/etcd@sha256:d0a641d5fbcc89678c931a61b7de7b8a1cf097149f135c9c73bc81d076a1494b"},
+         {"service":"milvus","source":"docker.io/milvusdb/milvus@sha256:fb57464669737ee9a9c43c6faa891527adab601241b0b488091c5f4eb4a13178"}]
+    secrets: inherit

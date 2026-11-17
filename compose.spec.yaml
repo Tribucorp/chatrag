@@ -1,0 +1,217 @@
+# ChatRAG en MarketplaceForge: lo que sparkd arranca en el equipo (Dell Pro Max GB10 / DGX Spark).
+# Formato composeServiceSchema de Tribucorp/sparkhub (packages/shared/src/mqtt/desired.ts): claves
+# en camelCase, sin build/deploy/depends_on/environment/restart/include. El `env` es LITERAL (sin
+# ${VAR}): los secretos los genera chatrag-api en su primer arranque (CHATRAG_GENERATE_SECRETS,
+# backend/src/chatrag_api/secretos.py) en el volumen chatrag-secretos, que lee el frontend.
+#
+# Imágenes: el pipeline (build-demo.yml) rellena `app`, `api` (propias, firmadas) y `etcd`/`milvus`
+# (réplicas por digest, firmadas) con su referencia de Harbor. Los NIM son de NVIDIA: van en
+# ngcImages del catálogo y sparkd les inyecta la clave NGC del partner como NGC_API_KEY.
+#
+# Sin MinIO: Milvus guarda segmentos y WAL en su volumen (COMMON_STORAGETYPE=local,
+# WOODPECKER_STORAGE_TYPE=local) — probado en spark-da29 (insertar, flush, buscar, reiniciar).
+# Las imágenes comunitarias de MinIO dejaron de publicarse en Docker Hub y quay.io.
+#
+# Arranque: sparkd va en orden de dependsOn y espera a `healthy`. El NIM de chat va primero: su
+# vLLM exige memoria libre ≥ fracción × 121 GB al arrancar. La primera vez cada NIM descarga su
+# modelo (20-30 min). Memoria estimada de la pila completa: ~85 GB de los 121 GB unificados (ver
+# deploy/marketplaceforge/README.md).
+services:
+  app:
+    # Frontend Next.js (BFF + UI), única entrada desde la red del cliente: http://<IP del equipo>:3000
+    dependsOn: [api]
+    ports: ["3000:3000"]
+    capDrop: ["ALL"]
+    noNewPrivileges: true
+    memLimit: "2g"
+    pidsLimit: 512
+    env:
+      CHATRAG_API_URL: http://api:8080
+      CHATRAG_SECRETS_DIR: /secretos
+      CHATRAG_AUTH_DB: /data/auth.sqlite
+      # Origen dinámico: se entra por la IP o el nombre del equipo, sea cual sea (auth.ts).
+      CHATRAG_ALLOWED_HOSTS: "*"
+      CHATRAG_AUTH_PROTOCOL: http
+      # Cuentas demo de Ventisca TI (empresa ficticia), contraseña pública en /login. Poner "0"
+      # en las variables de la solución del portal para un cliente real.
+      CHATRAG_AUTH_DEMO_SEED: "1"
+      # Micrófono y lectura en voz alta (Riva). El navegador solo da micrófono en https o en
+      # localhost: por http://IP en la red del cliente se ve el chat de texto, sin micrófono.
+      CHATRAG_VOICE_ENABLED: "1"
+      NEXT_PUBLIC_APP_NAME: ChatRAG
+    volumes:
+      - chatrag-secretos:/secretos:ro
+      - chatrag-auth:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 60
+
+  api:
+    # chatrag-api (FastAPI sobre el Tribu SDK). Sin puertos publicados: solo lo ve el frontend.
+    image: chatrag-api
+    dependsOn: [milvus]
+    readOnly: true
+    tmpfs: ["/tmp"]
+    capDrop: ["ALL"]
+    noNewPrivileges: true
+    memLimit: "3g"
+    pidsLimit: 256
+    env:
+      CHATRAG_GENERATE_SECRETS: "1"
+      CHATRAG_SECRETS_DIR: /secretos
+      CHATRAG_AUTO_INGEST: "1"
+      CHATRAG_APP_NAME: ChatRAG
+      CHATRAG_TENANT_ID: ventisca-ti
+      CHATRAG_EMBED_DIM: "2048"
+      CHATRAG_MILVUS_URI: http://milvus:19530
+      CHATRAG_NIM_CHAT_URL: http://nim-chat:8000
+      CHATRAG_NIM_CHAT_MODEL: nvidia/nemotron-nano-9b-v2  # el de ShowrunForge en producción con esta imagen
+      CHATRAG_NIM_EMBED_URL: http://nim-embed:8000
+      CHATRAG_NIM_EMBED_MODEL_ID: nvidia/llama-nemotron-embed-1b-v2
+      CHATRAG_NIM_RERANK_URL: http://nim-rerank:8000
+      CHATRAG_NIM_RERANK_MODEL_ID: nvidia/llama-nemotron-rerank-vl-1b-v2
+      CHATRAG_NIM_TTS_URL: http://nim-tts:9000
+      CHATRAG_NIM_ASR_URL: http://nim-asr:9000
+      CHATRAG_EGRESS_HOSTS: nim-chat,nim-embed,nim-rerank,nim-tts,nim-asr
+      CHATRAG_VOICE_ENABLED: "1"
+    volumes:
+      - chatrag-secretos:/secretos
+      - chatrag-knowledge:/knowledge
+      - chatrag-data:/data
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 60
+
+  etcd:
+    image: quay.io/coreos/etcd@sha256:d0a641d5fbcc89678c931a61b7de7b8a1cf097149f135c9c73bc81d076a1494b
+    command: ["etcd", "-advertise-client-urls=http://etcd:2379", "-listen-client-urls=http://0.0.0.0:2379", "--data-dir=/etcd"]
+    memLimit: "1g"
+    env:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - chatrag-etcd:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      intervalSeconds: 30
+      timeoutSeconds: 20
+      retries: 3
+
+  milvus:
+    image: milvusdb/milvus@sha256:fb57464669737ee9a9c43c6faa891527adab601241b0b488091c5f4eb4a13178
+    command: ["milvus", "run", "standalone"]
+    dependsOn: [etcd]
+    memLimit: "8g"
+    env:
+      ETCD_ENDPOINTS: etcd:2379
+      COMMON_STORAGETYPE: local
+      MQ_TYPE: woodpecker
+      WOODPECKER_STORAGE_TYPE: local
+    volumes:
+      - chatrag-milvus:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
+      intervalSeconds: 30
+      timeoutSeconds: 20
+      retries: 3
+      startPeriodSeconds: 90
+
+  nim-chat:
+    # Nemotron Nano 9B v2 para DGX Spark. 0,30 × 121 GB ≈ 36 GB (pesos + KV de 16k tokens).
+    image: nvcr.io/nim/nvidia/nvidia-nemotron-nano-9b-v2-dgx-spark:1.0.0-variant
+    gpus: all
+    shmSize: "16g"
+    env:
+      NIM_GPU_MEM_FRACTION: "0.30"
+      NIM_MAX_MODEL_LEN: "16384"
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - chatrag-nim-chat:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health/ready"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 1800
+
+  nim-tts:
+    # Riva TTS — Magpie Multilingual 1.10.0 (la misma imagen que X9Voz en producción en GB10).
+    image: nvcr.io/nim/nvidia/magpie-tts-multilingual:1.10.0
+    gpus: all
+    dependsOn: [nim-chat]
+    shmSize: "8g"
+    env:
+      NIM_HTTP_API_PORT: "9000"
+      NIM_GRPC_API_PORT: "50051"
+      NIM_TAGS_SELECTOR: name=magpie-tts-multilingual
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - chatrag-nim-tts:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/v1/health/ready"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 1800
+
+  nim-asr:
+    # Riva ASR — Parakeet 1.1b RNNT Multilingual (es-US/es-ES), offline sin diarización (~25,6 GB).
+    # Solo transcribe: nunca se infiere la emoción del usuario (regla dura de tribu-voice).
+    image: nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual@sha256:670db8fb668142017a12ef6fef1834e37119c3cd03180b87e5c26deb830d87d3
+    gpus: all
+    dependsOn: [nim-tts]
+    shmSize: "8g"
+    env:
+      NIM_HTTP_API_PORT: "9000"
+      NIM_GRPC_API_PORT: "50051"
+      NIM_TAGS_SELECTOR: mode=ofl,diarizer=disabled
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - chatrag-nim-asr:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/v1/health/ready"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 1800
+
+  nim-embed:
+    # Embeddings de 2048 dimensiones (el guard de dimensión de tribu-rag falla cerrado si no).
+    image: nvcr.io/nim/nvidia/llama-nemotron-embed-1b-v2:1
+    gpus: all
+    dependsOn: [nim-asr]
+    shmSize: "4g"
+    env:
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - chatrag-nim-embed:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health/ready"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 900
+
+  nim-rerank:
+    image: nvcr.io/nim/nvidia/llama-nemotron-rerank-vl-1b-v2:2.3
+    gpus: all
+    dependsOn: [nim-embed]
+    shmSize: "4g"
+    env:
+      NIM_TELEMETRY_MODE: "0"
+    volumes:
+      - chatrag-nim-rerank:/opt/nim/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/v1/health/ready"]
+      intervalSeconds: 30
+      timeoutSeconds: 5
+      retries: 3
+      startPeriodSeconds: 900

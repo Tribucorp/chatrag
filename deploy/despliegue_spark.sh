@@ -107,11 +107,7 @@ fi
 if corre 3; then
   azul "FASE 3 · Repos en el Spark"
   # rsync no crea directorios intermedios: en un Spark recién usado no existe ~/repositorio.
-  sh_spark "mkdir -p repositorio/chatrag repositorio/tribu-sdk/python/tribu-rag/deploy"
-  rsync -az --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
-    --exclude 'target' --exclude 'rust' --exclude 'scripts' --exclude '.mypy_cache' \
-    --exclude '__pycache__' -e "ssh ${SSH_OPTS[*]}" \
-    "$LOCAL_SDK/python/tribu-rag/deploy/" "$SPARK_SSH:repositorio/tribu-sdk/python/tribu-rag/deploy/"
+  sh_spark "mkdir -p repositorio/chatrag"
   rsync -az --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
     --exclude '.next' --exclude '.mypy_cache' --exclude '__pycache__' \
     --exclude '.env' --exclude '.env*.local' --exclude 'deploy/.env.chatrag-spark' \

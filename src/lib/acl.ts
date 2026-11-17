@@ -26,8 +26,8 @@ export function rolesToAcls(role: string | null | undefined): string[] {
   return [...ROLE_GRANTS[role].chatragAcl];
 }
 
-/** Único rol con acceso a /admin (ingesta, tema, conversaciones). Además del bearer de admin del
- * backend (`CHATRAG_ADMIN_TOKEN`): dos llaves distintas, sesión con rol + secreto de operación. */
+/** Único rol con acceso a /admin (ingesta, tema, conversaciones). Con él, el BFF añade el bearer
+ * de admin del backend (`CHATRAG_ADMIN_TOKEN`, server-only): basta la sesión. */
 export const ADMIN_ROLE = "adminSoporte";
 
 export function isAdminRole(role: string | null | undefined): boolean {

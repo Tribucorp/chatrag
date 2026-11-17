@@ -124,8 +124,10 @@ frontend — **solo desarrollo local, nunca en producción**.
 
 ## Administración (`/admin`, `/admin/theme`)
 
-Protegido por `CHATRAG_ADMIN_TOKEN` (bearer propio, distinto de `CHATRAG_SERVICE_BEARER_TOKEN`;
-sin configurar, `/admin/*` responde 503 siempre, nunca abierto por defecto):
+Se entra con una cuenta con el rol de administración (`adminSoporte`). El BFF añade server-side
+el bearer `CHATRAG_ADMIN_TOKEN` del backend (propio, distinto de `CHATRAG_SERVICE_BEARER_TOKEN`;
+lo necesitan backend y frontend; sin configurar, `/admin/*` responde 503 siempre, nunca abierto
+por defecto) — quien administra nunca lo escribe ni lo ve:
 
 - **`/admin`** — dispara `POST /admin/reindex` (ingesta real a `tribu-rag`/Milvus, ver
   `backend/src/chatrag_api/ingest.py`), estado del índice (`GET /admin/index-status`) y la
@@ -152,7 +154,7 @@ ese recolector exista sobre `tribu-rag`, no antes.
 
 ## Voz
 
-Apagada por defecto, opt-in explícito (`CHATRAG_VOICE_ENABLED`/`NEXT_PUBLIC_VOICE_ENABLED=0`).
+Apagada por defecto, opt-in explícito (`CHATRAG_VOICE_ENABLED=0`, en backend y frontend, leído en runtime).
 `tribu-voice` está **integrado** (`backend/src/chatrag_api/voice.py`): síntesis TTS + avatar +
 token efímero reales, sobre el código auditado del SDK. La revisión legal de NVIDIA
 (Product-Specific Terms §C.1.1/§C.1.2) fue confirmada por Javier (ver CLAUDE.md) — pero la

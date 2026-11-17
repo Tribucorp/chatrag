@@ -77,7 +77,6 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
       args:
-        NEXT_PUBLIC_VOICE_ENABLED: "0"
         NEXT_PUBLIC_SHOW_CITATIONS: ${CHATRAG_SHOW_CITATIONS:-1}
       secrets:
         - node_auth_token
@@ -94,11 +93,15 @@ services:
       PORT: "3000"
       CHATRAG_API_URL: http://127.0.0.1:8091
       CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      # Bearer de admin del backend: lo añade el BFF a /api/admin/* cuando la sesión tiene el rol
+      # de administración (src/app/api/admin/[...path]/route.ts). Nunca llega al navegador.
+      CHATRAG_ADMIN_TOKEN: ${CHATRAG_ADMIN_TOKEN:?falta CHATRAG_ADMIN_TOKEN}
       CHATRAG_AUTH_SECRET: ${CHATRAG_AUTH_SECRET:?falta CHATRAG_AUTH_SECRET}
       # Origen con el que el navegador ve la app (better-auth valida cookies/origen contra él).
       # Default: el túnel SSH a :3001 del Mac (el :3000 del Mac suele estar ocupado por `npm run dev`).
       CHATRAG_AUTH_URL: ${CHATRAG_COMPARTIDO_AUTH_URL:-http://localhost:3001}
       CHATRAG_AUTH_DEMO_SEED: ${CHATRAG_AUTH_DEMO_SEED:-0}
+      CHATRAG_VOICE_ENABLED: "0"
       NEXT_PUBLIC_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://' + process.env.HOSTNAME + ':3000/login').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]

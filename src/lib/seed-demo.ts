@@ -7,10 +7,8 @@ import { auth } from "./auth";
  * contraseña pública. Opt-in explícito: unas credenciales publicadas en la pantalla de login
  * nunca deben existir por defecto en un entorno real.
  *
- * Con el memoryAdapter de `createTribuAuth` (sin `database` en `auth.ts`) nada persiste entre
- * reinicios: cada arranque parte vacío y esto se ejecuta una vez por proceso. No es idempotente
- * contra una BD persistente — al conectar una BD real, las altas pasan a ser reales y este seed
- * se retira.
+ * Idempotente: con BD persistente (`CHATRAG_AUTH_DB`) no hace nada si la organización ya existe;
+ * con la BD en memoria (dev) se repite en cada arranque del proceso.
  */
 // Empresa FICTICIA de la demo: partner de soporte de servidores Dell PowerEdge. Dominio `.example`
 // (RFC 2606): reservado, no puede corresponder a nadie real.
@@ -39,6 +37,13 @@ declare global {
 }
 
 async function seedOnce(): Promise<void> {
+  // Con BD persistente (CHATRAG_AUTH_DB) el seed ya pudo correr en un arranque anterior.
+  const ctx = await auth.$context;
+  const existing = await ctx.adapter.findOne({
+    model: "organization",
+    where: [{ field: "slug", value: DEMO_ORG_SLUG }],
+  });
+  if (existing) return;
   const [creator, ...rest] = DEMO_USERS;
   const creatorSignUp = await auth.api.signUpEmail({
     body: { email: creator.email, password: DEMO_PASSWORD, name: creator.name },

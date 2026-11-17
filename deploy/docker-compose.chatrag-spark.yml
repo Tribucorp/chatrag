@@ -17,13 +17,52 @@
 #   docker compose --env-file deploy/.env.chatrag-spark -f deploy/docker-compose.chatrag-spark.yml up -d
 #
 # Requiere deploy/wheels/*.whl ya construidos (ver deploy/despliegue_spark.sh fase 2) antes del
-# primer build de chatrag-api — el registry privado del SDK no es alcanzable desde este Spark
-# hoy (ver docstring de deploy/Dockerfile.backend).
-
-include:
-  - path: ../../tribu-sdk/python/tribu-rag/deploy/docker-compose.milvus.yml
+# primer build de chatrag-api (ver deploy/Dockerfile.backend).
 
 services:
+  # Milvus sin MinIO: segmentos y WAL en su volumen (COMMON_STORAGETYPE=local,
+  # WOODPECKER_STORAGE_TYPE=local), igual que compose.spec.yaml — probado en spark-da29. Antes se
+  # incluía el compose de tribu-rag, que usa minio/minio: esas imágenes ya no se publican.
+  etcd:
+    image: quay.io/coreos/etcd@sha256:d0a641d5fbcc89678c931a61b7de7b8a1cf097149f135c9c73bc81d076a1494b
+    restart: unless-stopped
+    command: ["etcd", "-advertise-client-urls=http://etcd:2379", "-listen-client-urls=http://0.0.0.0:2379", "--data-dir=/etcd"]
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+      ETCD_SNAPSHOT_COUNT: "50000"
+    volumes:
+      - etcd-data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus-standalone:
+    image: milvusdb/milvus@sha256:fb57464669737ee9a9c43c6faa891527adab601241b0b488091c5f4eb4a13178
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    depends_on:
+      etcd:
+        condition: service_healthy
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      COMMON_STORAGETYPE: local
+      MQ_TYPE: woodpecker
+      WOODPECKER_STORAGE_TYPE: local
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports:
+      - "127.0.0.1:19530:19530"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+
   # Mismo hallazgo real que el maestro (17-ago-2026): un volumen con nombre nuevo lo crea
   # Docker root:root, y el NIM (que corre como UID 1000 "nvs" dentro del contenedor) crashea
   # al intentar escribir su caché de modelo ahí. Se corrige el propietario una sola vez, antes
@@ -205,17 +244,6 @@ services:
               count: all
               capabilities: [gpu]
 
-  # Seed inicial de knowledge/*.md (baked en la imagen de chatrag-api en /seed-knowledge, ver
-  # deploy/Dockerfile.backend) dentro del volumen con nombre — mismo patrón init-container que
-  # fix-nim-cache-perms arriba, evita una ruta de host en `volumes:`. Solo copia si el volumen
-  # está vacío (no pisa documentos subidos después vía POST /admin/sources).
-  seed-knowledge:
-    image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
-    command: ["sh", "-c", "[ -n \"$$(ls -A /knowledge 2>/dev/null)\" ] || cp -r /seed-knowledge/. /knowledge/"]
-    volumes:
-      - chatrag-knowledge:/knowledge
-    restart: "no"
-
   chatrag-api:
     image: ${CHATRAG_API_IMAGE:-chatrag-api:latest}
     build:
@@ -223,8 +251,8 @@ services:
       dockerfile: deploy/Dockerfile.backend
     restart: unless-stopped
     depends_on:
-      seed-knowledge:
-        condition: service_completed_successfully
+      milvus-standalone:
+        condition: service_healthy
       nim-chat:
         condition: service_healthy
       nim-embed:
@@ -281,9 +309,6 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.frontend
-      # NEXT_PUBLIC_* se incrusta en el bundle al compilar: la voz del navegador se decide aquí.
-      args:
-        NEXT_PUBLIC_VOICE_ENABLED: ${CHATRAG_VOICE_ENABLED:-0}
       # @tribu/auth desde GitHub Packages: token read:packages SOLO en el build (secreto de
       # BuildKit, no queda en la imagen). `export NODE_AUTH_TOKEN=...` antes de `compose build`.
       secrets:
@@ -295,10 +320,14 @@ services:
     environment:
       CHATRAG_API_URL: http://chatrag-api:8080
       CHATRAG_SERVICE_BEARER_TOKEN: ${CHATRAG_SERVICE_BEARER_TOKEN:?falta CHATRAG_SERVICE_BEARER_TOKEN}
+      # Bearer de admin del backend: lo añade el BFF a /api/admin/* cuando la sesión tiene el rol
+      # de administración (src/app/api/admin/[...path]/route.ts). Nunca llega al navegador.
+      CHATRAG_ADMIN_TOKEN: ${CHATRAG_ADMIN_TOKEN:?falta CHATRAG_ADMIN_TOKEN}
       CHATRAG_AUTH_SECRET: ${CHATRAG_AUTH_SECRET:?falta CHATRAG_AUTH_SECRET}
       CHATRAG_AUTH_URL: ${CHATRAG_AUTH_URL:?falta CHATRAG_AUTH_URL}
       # Cuentas demo con contraseña pública (src/lib/seed-demo.ts): solo para la demo, opt-in.
       CHATRAG_AUTH_DEMO_SEED: ${CHATRAG_AUTH_DEMO_SEED:-0}
+      CHATRAG_VOICE_ENABLED: ${CHATRAG_VOICE_ENABLED:-0}
       NEXT_PUBLIC_APP_NAME: ${CHATRAG_APP_NAME:-ChatRAG}
     ports:
       # Mismo criterio que los NIM: solo loopback salvo que se fije explícitamente a la IP
@@ -306,6 +335,8 @@ services:
       - "${CHATRAG_FRONTEND_BIND_HOST:-127.0.0.1}:3000:3000"
 
 volumes:
+  etcd-data:
+  milvus-data:
   nim-chat-cache:
   nim-embed-cache:
   nim-rerank-cache:
